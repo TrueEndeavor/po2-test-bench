@@ -23,7 +23,7 @@ st.set_page_config(
 # Compact layout CSS
 st.markdown(
     """<style>
-    .block-container { padding-top: 4rem; padding-bottom: 0; }
+    .block-container { padding-top: 5.5rem; padding-bottom: 0; }
     [data-testid="stExpander"] { margin-bottom: 0.3rem; }
     [data-testid="stExpander"] details summary { padding: 0.4rem 0.6rem; }
     [data-testid="stVerticalBlock"] > div { gap: 0.3rem; }
@@ -208,11 +208,7 @@ for tc in sorted(tc_doc_map, key=tc_sort_key):
     desc = tc_doc_map[tc]
     banner_parts.append(f"**{tc}** — {desc}")
 
-st.markdown(
-    f"#### {'  ·  '.join(banner_parts)}  ·  "
-    f"{total} findings"
-    + (f"  ·  :red[{deleted_count} deleted]" if deleted_count else "")
-)
+st.markdown(f"#### {'  ·  '.join(banner_parts)}")
 
 # PDF download links
 pdf_cols = st.columns(len(tc_pdf_map)) if tc_pdf_map else []
@@ -287,7 +283,7 @@ with tab_curate:
         sb_summary = theme_df.groupby("sub_bucket").size().sort_values(ascending=False)
 
         lock_icon = "🔒 " if is_locked else ""
-        with st.expander(f"{lock_icon}**{theme}** — {count_in_theme} findings", expanded=False):
+        with st.expander(f"{lock_icon}**{theme}**", expanded=False):
 
             if is_locked:
                 st.info(
