@@ -9,9 +9,9 @@ from modules.config import REVIEW_FIELDS
 
 @st.cache_resource
 def get_client():
-    uri = os.getenv("MONGODB_URI")
+    uri = os.getenv("MONGODB_URI") or st.secrets.get("MONGODB_URI", "")
     if not uri:
-        st.error("MONGODB_URI not found in .env")
+        st.error("MONGODB_URI not found in .env or Streamlit secrets")
         st.stop()
     return MongoClient(uri)
 
