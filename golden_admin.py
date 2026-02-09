@@ -76,6 +76,16 @@ def load_golden_records():
     return list(coll.find().sort("created_at", -1))
 
 
+@st.cache_data(ttl=60)
+def cached_deletion_keys():
+    return load_deletion_keys()
+
+
+@st.cache_data(ttl=60)
+def cached_category_statuses():
+    return get_category_statuses()
+
+
 def extract_golden_findings(doc, source="raw_output"):
     """Adapt golden_outputs structure for extract_findings_for_review()."""
     doc_id = str(doc["_id"])
@@ -177,18 +187,17 @@ df = pd.DataFrame(all_rows)
 df["theme"] = df["category"].apply(cat_to_theme)
 
 # --- Soft-delete filtering: hide findings that were previously deleted ---
-deletion_keys = load_deletion_keys()
-total_before_filter = len(df)
+deletion_keys = cached_deletion_keys()
 
 if deletion_keys:
-    mask = df.apply(
-        lambda r: (r["_doc_id"], r["_source"], r["_art_key"], r["_section_idx"]) not in deletion_keys,
-        axis=1,
-    )
+    keys = set(zip(df["_doc_id"], df["_source"], df["_art_key"], df["_section_idx"]))
+    mask = [
+        (r["_doc_id"], r["_source"], r["_art_key"], r["_section_idx"]) not in deletion_keys
+        for _, r in df.iterrows()
+    ]
     df = df[mask].reset_index(drop=True)
 
 total = len(df)
-deleted_count = get_deletion_count()
 
 # ---------------------------------------------------------------------------
 # Selected TCs banner with PDF links
@@ -226,7 +235,7 @@ for i, (tc, path) in enumerate(sorted(tc_pdf_map.items(), key=lambda x: tc_sort_
 # ---------------------------------------------------------------------------
 # Category lock status
 # ---------------------------------------------------------------------------
-cat_statuses = get_category_statuses()
+cat_statuses = cached_category_statuses()
 
 # ---------------------------------------------------------------------------
 # Tabs: Curate | Browse Details | Add Ground Truth
