@@ -23,8 +23,7 @@ st.set_page_config(
 # Compact layout CSS
 st.markdown(
     """<style>
-    .block-container { padding-top: 0.8rem; padding-bottom: 0; }
-    header[data-testid="stHeader"] { height: 2rem; }
+    .block-container { padding-top: 2.5rem; padding-bottom: 0; }
     [data-testid="stExpander"] { margin-bottom: 0.3rem; }
     [data-testid="stExpander"] details summary { padding: 0.4rem 0.6rem; }
     [data-testid="stVerticalBlock"] > div { gap: 0.3rem; }
