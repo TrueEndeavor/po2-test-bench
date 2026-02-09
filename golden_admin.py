@@ -131,9 +131,10 @@ tc_options = sorted(
 
 st.markdown("### PO2 Golden Dataset Admin")
 
-selected_tcs = st.pills(
-    "Test Cases", tc_options, selection_mode="multi",
+selected_tc = st.pills(
+    "Test Cases", tc_options, selection_mode="single",
 )
+selected_tcs = [selected_tc] if selected_tc else []
 
 if st.button("Refresh", key="refresh_btn"):
     st.cache_data.clear()
