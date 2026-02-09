@@ -21,10 +21,13 @@ ARTIFACT_TYPES = [
 CATEGORY_THEMES = {
     "Misleading or Unsubstantiated Claims":   "T1 - Misleading",
     "Performance Presentation & Reporting":   "T2 - Performance",
+    "Performance Presentation & Reporting Violations": "T2 - Performance",
     "Inadequate or Missing Disclosures":      "T3 - Disclosures",
     "Testimonials & Endorsements":            "T4 - Testimonials",
+    "Improper Use of Testimonials & Endorsements": "T4 - Testimonials",
     "Digital & Distribution Controls":        "T5 - Digital",
     "Comparisons and Competitive Claims":     "T6 - Comparisons",
+    "False or Misleading Comparisons Rankings": "T6 - Comparisons",
     "Ratings & Data Context Validation":      "T7 - Rankings",
     "Improper Use of Third-Party Content & Intellectual Property": "T8 - Third-Party",
     "Editorial (Non-Regulatory)":             "T9 - Editorial",
