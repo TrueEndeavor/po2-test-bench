@@ -60,9 +60,18 @@ with st.sidebar:
     existing_count = golden_coll.count_documents({})
     st.metric("Golden Records", existing_count)
 
+    # Auto-increment silver version: silver_v1, silver_v2, ...
+    existing_labels = golden_coll.distinct("run_label")
+    silver_versions = [
+        int(l.split("_v")[1])
+        for l in existing_labels
+        if l.startswith("silver_v") and l.split("_v")[1].isdigit()
+    ]
+    next_version = max(silver_versions, default=0) + 1
+
     run_label = st.text_input(
-        "Run Label",
-        value=f"baseline_{datetime.now().strftime('%Y%m%d')}",
+        "Silver Baseline",
+        value=f"silver_v{next_version}",
     )
 
     capture = st.button(
