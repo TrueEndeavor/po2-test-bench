@@ -217,7 +217,8 @@ for tc in sorted(tc_doc_map, key=tc_sort_key):
     desc = tc_doc_map[tc]
     banner_parts.append(f"**{tc}** — {desc}")
 
-st.markdown(f"#### {'  ·  '.join(banner_parts)}  ·  {total} findings")
+active_count = len(df[df["category"].isin(ACTIVE_CATEGORIES)])
+st.markdown(f"#### {'  ·  '.join(banner_parts)}  ·  {active_count} findings")
 
 # PDF download links
 pdf_cols = st.columns(len(tc_pdf_map)) if tc_pdf_map else []
