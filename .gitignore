@@ -1,0 +1,10 @@
+.env
+.env copy
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+venv/
+.venv/
+test_docs/
+*.pdf
+app copy.py
