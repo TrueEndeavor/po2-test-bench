@@ -272,7 +272,7 @@ with tab_curate:
     col_config = {
         "delete": st.column_config.CheckboxColumn("Delete", width="small"),
         "page": st.column_config.NumberColumn("Pg", width="small", disabled=True),
-        "sentence": st.column_config.TextColumn("Flagged Text", width="large", disabled=True),
+        "sentence": st.column_config.TextColumn("sentence", width="large", disabled=True),
     }
 
     if "last_action" in st.session_state:
@@ -398,10 +398,10 @@ with tab_curate:
                         confirm_key = f"pop_confirm_{pop_key}"
                         with detail_cols[j % len(detail_cols)]:
                             with st.popover(f"Pg {rd['page']}", use_container_width=True):
-                                st.markdown(f"**Rule:** {rd['rule_citation']}")
-                                st.markdown(f"**Observations:** {rd['observations']}")
-                                st.markdown(f"**Recommendations:** {rd['recommendations']}")
-                                st.markdown(f"**Summary:** {rd['summary']}")
+                                st.markdown(f"**rule_citation:** {rd['rule_citation']}")
+                                st.markdown(f"**observations:** {rd['observations']}")
+                                st.markdown(f"**recommendations:** {rd['recommendations']}")
+                                st.markdown(f"**summary:** {rd['summary']}")
                                 st.divider()
                                 if is_locked:
                                     st.caption("Category is locked — no deletions.")
@@ -554,16 +554,15 @@ with tab_details:
             col_a, col_b = st.columns(2)
             with col_a:
                 st.markdown(f"**{tc_label}** — {tc_desc}")
-                st.markdown(f"**Page:** {row['page']}")
-                st.markdown(f"**Category:** {row['category']}")
-                st.markdown(f"**Sub-Bucket:** {row.get('sub_bucket', '')}")
-                st.markdown(f"**Rule:** {row['rule_citation']}")
+                st.markdown(f"**page:** {row['page']}")
+                st.markdown(f"**category:** {row['category']}")
+                st.markdown(f"**sub_bucket:** {row.get('sub_bucket', '')}")
+                st.markdown(f"**rule_citation:** {row['rule_citation']}")
             with col_b:
-                st.markdown(f"**Observations:** {row['observations']}")
-                st.markdown(f"**Recommendations:** {row['recommendations']}")
-                st.markdown(f"**Summary:** {row['summary']}")
+                st.markdown(f"**observations:** {row['observations']}")
+                st.markdown(f"**recommendations:** {row['recommendations']}")
                 if row.get("reject_reason"):
-                    st.markdown(f"**Reject Reason:** :red[{row['reject_reason']}]")
+                    st.markdown(f"**reject_reason:** :red[{row['reject_reason']}]")
 
             del_key = f"detail_del_{i}"
             confirm_key = f"detail_confirm_{i}"
