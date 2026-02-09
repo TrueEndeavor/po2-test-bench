@@ -217,7 +217,7 @@ for tc in sorted(tc_doc_map, key=tc_sort_key):
     desc = tc_doc_map[tc]
     banner_parts.append(f"**{tc}** — {desc}")
 
-st.markdown(f"#### {'  ·  '.join(banner_parts)}")
+st.markdown(f"#### {'  ·  '.join(banner_parts)}  ·  {total} findings")
 
 # PDF download links
 pdf_cols = st.columns(len(tc_pdf_map)) if tc_pdf_map else []
