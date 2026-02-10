@@ -23,8 +23,8 @@ def load_ground_truth():
     keys = set()
     for _, row in gt_df.iterrows():
         tc = str(row.get("TC Id", "")).strip()
-        page = int(row.get("Page Number", 0)) if pd.notna(row.get("Page Number")) else 0
-        sentence = str(row.get("Non compliant", "")).strip()
+        page = int(row.get("page_number", 0)) if pd.notna(row.get("page_number")) else 0
+        sentence = str(row.get("sentence", "")).strip()
         if tc and sentence:
             keys.add((tc, page, sentence[:50].lower()))
 
@@ -85,16 +85,16 @@ def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
     # Get valid themes for this TC from GT
     valid_themes = set()
     for _, row in tc_gt.iterrows():
-        category = str(row.get("Category", "")).strip()
+        category = str(row.get("category", "")).strip()
         if category:
             valid_themes.add(category.lower())
 
     # Build theme-based GT lookup: (tc, page, category) -> list of sentences
     gt_theme_map = {}
     for _, row in tc_gt.iterrows():
-        page = int(row.get("Page Number", 0)) if pd.notna(row.get("Page Number")) else 0
-        category = str(row.get("Category", "")).strip().lower()
-        sentence = str(row.get("Non compliant", "")).strip()
+        page = int(row.get("page_number", 0)) if pd.notna(row.get("page_number")) else 0
+        category = str(row.get("category", "")).strip().lower()
+        sentence = str(row.get("sentence", "")).strip()
         key = (tc_number.upper(), page, category)
         if key not in gt_theme_map:
             gt_theme_map[key] = []
@@ -225,10 +225,10 @@ def get_missing_gt_findings(gt_df, tc_number, found_findings, gt_keys):
             missing.append({
                 "page": page,
                 "sentence": sentence,
-                "category": gt_row.get("Category", ""),
-                "sub_bucket": gt_row.get("Sub Bucket", ""),
-                "reasoning": gt_row.get("Reasoning", ""),
-                "rule_citation": gt_row.get("Rule citation", ""),
+                "category": gt_row.get("category", ""),
+                "sub_bucket": gt_row.get("sub_bucket", ""),
+                "reasoning": gt_row.get("observations", ""),
+                "rule_citation": gt_row.get("rule_citation", ""),
             })
 
     return missing
