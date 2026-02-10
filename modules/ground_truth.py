@@ -16,8 +16,8 @@ def load_ground_truth():
     gt_df = pd.read_csv(GROUND_TRUTH_CSV)
     gt_df.columns = gt_df.columns.str.strip()
 
-    # Filter to only Theme 1: Misleading or Unsubstantiated Claims
-    gt_df = gt_df[gt_df["Category"].str.strip() == "Misleading or Unsubstantiated Claims"].copy()
+    # Include ALL categories (no filtering)
+    # Categories: Misleading, Inadequate or Missing Disclosures, Rankings/Ratings
 
     # Build lookup keys: (tc_number, page, first 50 chars of non-compliant sentence)
     keys = set()

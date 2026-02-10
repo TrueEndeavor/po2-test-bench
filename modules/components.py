@@ -201,7 +201,7 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
 
     # Display GT metrics summary
     if has_gt and agg_gt["expected"] > 0:
-        st.markdown("### Ground Truth Comparison (Theme 1: Misleading)")
+        st.markdown("### Ground Truth Comparison (All Categories)")
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("GT Expected", agg_gt["expected"], help="Total findings in ground truth")
