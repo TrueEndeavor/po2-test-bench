@@ -100,14 +100,10 @@ def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
             gt_theme_map[key] = []
         gt_theme_map[key].append(sentence)
 
-    # Classify findings with weighted scoring
-    tp = 0.0  # Full matches (exact sentence)
-    partial_tp = 0.0  # Partial matches (same theme + page)
-    fp = 0  # False positives (wrong theme or not in GT)
-    suppressed = 0  # Findings from themes not in GT
-
+    # Simple scoring: TP or FP (no partial matches, no suppression)
+    tp = 0
+    fp = 0
     detailed_findings = []
-    matched_gt = set()  # Track which GT entries were matched
 
     for finding in findings_list:
         page = finding.get("page", 0)
@@ -117,74 +113,40 @@ def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
             page = 0
 
         sentence = str(finding.get("sentence", "")).strip()
-        category = str(finding.get("category", "")).strip().lower()
 
-        # Check if this finding is from a valid GT theme
-        if category not in valid_themes:
-            suppressed += 1
-            detailed_findings.append({
-                **finding,
-                "gt_status": "SUPPRESSED",
-                "score": 0.0,
-                "match_type": "Theme not in GT"
-            })
-            continue
-
-        # Check for exact match first
+        # Check for exact match
         is_exact = is_ground_truth(tc_number, page, sentence, gt_keys)
 
         if is_exact:
-            tp += 1.0
-            matched_gt.add((tc_number.upper(), page, sentence[:50].lower()))
+            tp += 1
             detailed_findings.append({
                 **finding,
                 "gt_status": "TP",
-                "score": 1.0,
                 "match_type": "Exact match"
             })
         else:
-            # Check for theme + page match
-            theme_key = (tc_number.upper(), page, category)
-            if theme_key in gt_theme_map:
-                # Found a GT entry with same theme and page
-                partial_tp += 0.5
-                detailed_findings.append({
-                    **finding,
-                    "gt_status": "PARTIAL_TP",
-                    "score": 0.5,
-                    "match_type": f"Theme + page match (P{page})"
-                })
-            else:
-                # Valid theme but wrong page or no GT for this page
-                fp += 1
-                detailed_findings.append({
-                    **finding,
-                    "gt_status": "FP",
-                    "score": 0.0,
-                    "match_type": "Valid theme, wrong page/context"
-                })
+            fp += 1
+            detailed_findings.append({
+                **finding,
+                "gt_status": "FP",
+                "match_type": "Not in GT"
+            })
 
-    # Calculate false negatives (GT entries not matched) - as integer
-    fn = int(expected_count - tp)
+    # False negatives = GT entries not found by API
+    fn = expected_count - tp
 
-    # Weighted metrics
-    weighted_tp = tp + partial_tp
-    total_found = tp + partial_tp + fp
-
-    precision = weighted_tp / total_found if total_found > 0 else 0.0
-    recall = weighted_tp / expected_count if expected_count > 0 else 0.0
+    # Simple metrics
+    total_found = len(findings_list)
+    precision = tp / total_found if total_found > 0 else 0.0
+    recall = tp / expected_count if expected_count > 0 else 0.0
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
     return {
-        "tp": int(tp),
-        "partial_tp": partial_tp,
-        "fp": int(fp),
+        "tp": tp,
+        "fp": fp,
         "fn": fn,
-        "suppressed": suppressed,
-        "weighted_tp": weighted_tp,
         "expected": expected_count,
-        "found": len(findings_list),
-        "relevant_found": int(tp + partial_tp + fp),  # Findings from valid themes
+        "found": total_found,
         "precision": precision,
         "recall": recall,
         "f1": f1,

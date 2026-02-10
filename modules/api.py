@@ -39,7 +39,7 @@ def submit_from_mongo(doc):
     file_bytes = bytes(doc["file_data"])
     files = {"file": (filename, file_bytes, "application/pdf")}
     data = {"metadata": json.dumps(metadata)}
-    response = requests.post(API_URL, files=files, data=data, timeout=300)
+    response = requests.post(API_URL, files=files, data=data, timeout=600)
     return response, metadata
 
 
@@ -50,5 +50,5 @@ def submit_document(filepath):
     with open(filepath, "rb") as f:
         files = {"file": (filename, f, "application/pdf")}
         data = {"metadata": json.dumps(metadata)}
-        response = requests.post(API_URL, files=files, data=data, timeout=300)
+        response = requests.post(API_URL, files=files, data=data, timeout=600)
     return response, metadata
