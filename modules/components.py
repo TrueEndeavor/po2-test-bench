@@ -25,38 +25,25 @@ def render_metrics_bar(doc_count, results, gt_keys=None, gt_df=None):
     has_gt = gt_keys is not None and gt_df is not None and not gt_df.empty
 
     if has_gt and run_count > 0:
-        agg_gt = {
-            "tp": 0, "partial_tp": 0.0, "fp": 0, "fn": 0,
-            "expected": 0, "weighted_tp": 0.0
-        }
+        agg_gt = {"tp": 0, "fp": 0, "fn": 0, "expected": 0, "found": 0}
 
         for r in results.values():
             if r.get("success") and r.get("gt_metrics"):
                 metrics = r["gt_metrics"]
                 agg_gt["tp"] += metrics.get("tp", 0)
-                agg_gt["partial_tp"] += metrics.get("partial_tp", 0.0)
                 agg_gt["fp"] += metrics.get("fp", 0)
                 agg_gt["fn"] += metrics.get("fn", 0)
                 agg_gt["expected"] += metrics.get("expected", 0)
-                agg_gt["weighted_tp"] += metrics.get("weighted_tp", 0.0)
+                agg_gt["found"] += metrics.get("relevant_found", 0)
 
-        # Calculate consolidated score
-        score_pct = (agg_gt["weighted_tp"] / agg_gt["expected"] * 100) if agg_gt["expected"] > 0 else 0.0
-
-        m1, m2, m3, m4, m5 = st.columns(5)
+        # Single row metrics
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
         m1.metric("TCs Run", f"{run_count}/{doc_count}")
         m2.metric("GT Expected", agg_gt["expected"])
-        m3.metric("Score", f"{score_pct:.1f}%", help="Weighted TP / GT Expected")
-        m4.metric("Exact Match", agg_gt["tp"])
-        m5.metric("Partial", f"{agg_gt['partial_tp']:.0f}")
-
-        # Second row
-        m6, m7, m8, m9, m10 = st.columns(5)
-        m6.metric("False Positive", agg_gt["fp"])
-        m7.metric("False Negative", agg_gt["fn"])
-        m8.metric("Weighted TP", f"{agg_gt['weighted_tp']:.1f}")
-        m9.metric("Pending", pending)
-        m10.metric("", "")  # Empty for spacing
+        m3.metric("API Found", agg_gt["found"])
+        m4.metric("Exact Match (TP)", agg_gt["tp"])
+        m5.metric("False Positive", agg_gt["fp"])
+        m6.metric("False Negative", agg_gt["fn"])
     else:
         # No GT data yet, show basic metrics
         m1, m2, m3, m4 = st.columns(4)
@@ -214,19 +201,16 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
 
     # Display GT metrics summary
     if has_gt and agg_gt["expected"] > 0:
-        st.markdown("### Ground Truth Comparison")
+        st.markdown("### Ground Truth Comparison (Theme 1: Misleading)")
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("GT Expected", agg_gt["expected"], help="Total findings in ground truth")
-        col2.metric("API Found", agg_gt["relevant_found"], help="Findings from GT themes only")
-        col3.metric("Suppressed", agg_gt["suppressed"], help="Findings from non-GT themes (ignored)")
-        col4.metric("Total API", agg_gt["found"], help="All findings from API")
+        col2.metric("API Found", agg_gt["relevant_found"], help="Findings from GT theme")
+        col3.metric("Exact Matches (TP)", agg_gt["tp"], help="Exact sentence match")
+        col4.metric("False Positives", agg_gt["fp"], help="Wrong page/context")
 
-        col5, col6, col7, col8 = st.columns(4)
-        col5.metric("Exact Matches (TP)", agg_gt["tp"], help="Full credit: Exact sentence match")
-        col6.metric("Partial Matches", f"{agg_gt['partial_tp']:.1f}", help="Partial credit: Same theme + page")
-        col7.metric("False Positives", agg_gt["fp"], help="Valid theme but wrong page/context")
-        col8.metric("False Negatives", agg_gt["fn"], help="In GT but NOT found by API")
+        col5, col6, _, _ = st.columns(4)
+        col5.metric("False Negatives", agg_gt["fn"], help="In GT but NOT found by API")
 
         if st.button("📊 View Detailed GT Comparison", use_container_width=True):
             st.session_state["drill_level"] = "gt_comparison"

@@ -16,6 +16,9 @@ def load_ground_truth():
     gt_df = pd.read_csv(GROUND_TRUTH_CSV)
     gt_df.columns = gt_df.columns.str.strip()
 
+    # Filter to only Theme 1: Misleading or Unsubstantiated Claims
+    gt_df = gt_df[gt_df["Category"].str.strip() == "Misleading or Unsubstantiated Claims"].copy()
+
     # Build lookup keys: (tc_number, page, first 50 chars of non-compliant sentence)
     keys = set()
     for _, row in gt_df.iterrows():
@@ -161,8 +164,8 @@ def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
                     "match_type": "Valid theme, wrong page/context"
                 })
 
-    # Calculate false negatives (GT entries not matched)
-    fn = expected_count - tp
+    # Calculate false negatives (GT entries not matched) - as integer
+    fn = int(expected_count - tp)
 
     # Weighted metrics
     weighted_tp = tp + partial_tp
@@ -175,7 +178,7 @@ def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
     return {
         "tp": int(tp),
         "partial_tp": partial_tp,
-        "fp": fp,
+        "fp": int(fp),
         "fn": fn,
         "suppressed": suppressed,
         "weighted_tp": weighted_tp,
