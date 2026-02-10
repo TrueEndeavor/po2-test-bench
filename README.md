@@ -2,6 +2,8 @@
 
 A Ground Truth testing and validation platform for compliance document analysis with weighted scoring and cute run names! 🎯
 
+📊 **[Executive Summary](EXECUTIVE_SUMMARY.md)** - Quick feature overview for stakeholders
+
 ## Features
 
 - 🎯 **Weighted GT Scoring**: Exact match (1.0) + Partial match (0.5) + Theme suppression
