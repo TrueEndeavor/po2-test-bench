@@ -263,7 +263,10 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
         elif r["success"]:
             st.caption(f"\u2705 **{tc}**: No findings")
         else:
+            error_msg = r.get("response", "Unknown error")
             st.caption(f"\u274c **{tc}**: Failed ({r['status_code']})")
+            with st.expander(f"View error details for {tc}"):
+                st.error(error_msg)
 
 
 # ---------------------------------------------------------------------------

@@ -40,6 +40,10 @@ def get_golden_category_status_collection():
     return get_db()["golden_category_status"]
 
 
+def get_runs_collection():
+    return get_db()["test_runs"]
+
+
 # ---------------------------------------------------------------------------
 # simple_viewer.py write-back (PO2_testing collection)
 # ---------------------------------------------------------------------------
