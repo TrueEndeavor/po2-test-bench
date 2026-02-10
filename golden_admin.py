@@ -28,6 +28,12 @@ st.markdown(
     [data-testid="stExpander"] details summary { padding: 0.4rem 0.6rem; }
     [data-testid="stVerticalBlock"] > div { gap: 0.3rem; }
     div[data-testid="stDataFrame"] { margin-bottom: 0; }
+    .gt-row { background: #c8f7c5 !important; border-left: 4px solid #6bcb77 !important;
+              padding: 4px 10px; border-radius: 4px; margin: 2px 0; }
+    .gt-badge { background: #c8f7c5; color: #2d6a2e; padding: 2px 8px;
+                border-radius: 4px; font-weight: 600; font-size: 0.85em; }
+    .gt-table [data-testid="stDataFrame"] { background: #e8fbe8; border-left: 3px solid #6bcb77;
+              border-radius: 4px; }
     </style>""",
     unsafe_allow_html=True,
 )
@@ -49,6 +55,46 @@ from modules.db import (
 from modules.parsers import extract_findings_for_review, cat_to_theme
 from modules.naming import tc_sort_key, short_name
 from modules.config import ARTIFACT_TYPES, CATEGORY_THEMES, THEME_ORDER, TEST_DOCS_DIR
+
+# ---------------------------------------------------------------------------
+# Ground truth loading & matching
+# ---------------------------------------------------------------------------
+GROUND_TRUTH_CSV = Path(__file__).resolve().parent / "ground_truth.csv"
+
+
+@st.cache_data(ttl=300)
+def load_ground_truth():
+    """Load validated ground truth CSV and return set of (tc, page, sentence_prefix) keys."""
+    if not GROUND_TRUTH_CSV.exists():
+        return set(), pd.DataFrame()
+    gt_df = pd.read_csv(GROUND_TRUTH_CSV)
+    gt_df.columns = gt_df.columns.str.strip()
+    # Build lookup keys: (tc_number, page, first 50 chars of non-compliant sentence)
+    keys = set()
+    for _, row in gt_df.iterrows():
+        tc = str(row.get("TC Id", "")).strip()
+        page = int(row.get("Page Number", 0)) if pd.notna(row.get("Page Number")) else 0
+        sentence = str(row.get("Non compliant", "")).strip()
+        if tc and sentence:
+            keys.add((tc, page, sentence[:50].lower()))
+    return keys, gt_df
+
+
+def is_ground_truth(tc_number, page, sentence, gt_keys):
+    """Check if a finding matches any ground truth entry."""
+    if not gt_keys:
+        return False
+    tc = str(tc_number).strip()
+    pg = int(page) if pd.notna(page) else 0
+    sent = str(sentence).strip().lower()
+    # Exact prefix match (first 50 chars)
+    if (tc, pg, sent[:50]) in gt_keys:
+        return True
+    # Fallback: check if any GT sentence prefix is contained in the finding
+    for gt_tc, gt_pg, gt_prefix in gt_keys:
+        if tc == gt_tc and pg == gt_pg and gt_prefix and gt_prefix in sent:
+            return True
+    return False
 
 # ---------------------------------------------------------------------------
 # Active category — only T1 for now; unlock more as curation progresses
@@ -134,12 +180,32 @@ def find_pdf_path(filename):
 # ---------------------------------------------------------------------------
 golden_records = load_golden_records()
 
+# Run label filter - only show golden_v* baselines
+run_labels = sorted(
+    set(r.get("run_label", "") for r in golden_records),
+    reverse=True,
+)
+golden_labels = [rl for rl in run_labels if rl.startswith("golden_v")]
+
+st.markdown("### PO2 Golden Dataset Admin")
+
+if golden_labels:
+    selected_run_label = st.selectbox(
+        "Golden Baseline",
+        golden_labels,
+        help="Select the golden baseline to curate. Only golden_v* runs are shown.",
+    )
+else:
+    st.error("No golden baseline found. Please run 'Capture Golden Baseline' from main.py first with a golden_v* label.")
+    st.stop()
+
+# Filter records by selected run label
+golden_records = [r for r in golden_records if r.get("run_label") == selected_run_label]
+
 tc_options = sorted(
     set(r.get("tc_number", "") for r in golden_records),
     key=tc_sort_key,
 )
-
-st.markdown("### PO2 Golden Dataset Admin")
 
 selected_tc = st.pills(
     "Test Cases", tc_options, selection_mode="single",
@@ -186,16 +252,29 @@ if not all_rows:
 df = pd.DataFrame(all_rows)
 df["theme"] = df["category"].apply(cat_to_theme)
 
+# --- Ground truth matching ---
+gt_keys, gt_df = load_ground_truth()
+df["is_gt"] = df.apply(
+    lambda r: is_ground_truth(r["tc_number"], r["page"], r["sentence"], gt_keys),
+    axis=1,
+)
+
 # --- Soft-delete filtering: hide findings that were previously deleted ---
 deletion_keys = cached_deletion_keys()
 
 if deletion_keys:
-    keys = set(zip(df["_doc_id"], df["_source"], df["_art_key"], df["_section_idx"]))
     mask = [
         (r["_doc_id"], r["_source"], r["_art_key"], r["_section_idx"]) not in deletion_keys
         for _, r in df.iterrows()
     ]
     df = df[mask].reset_index(drop=True)
+
+# --- Filter out sec_typographycheck results ---
+df = df[
+    ~df["_source"].str.contains("sec_typographycheck", case=False, na=False) &
+    ~df["run_label"].astype(str).str.contains("sec_typographycheck", case=False, na=False) &
+    ~df["artifact_type"].astype(str).str.contains("sec_typographycheck", case=False, na=False)
+].reset_index(drop=True)
 
 total = len(df)
 
@@ -218,7 +297,12 @@ for tc in sorted(tc_doc_map, key=tc_sort_key):
     banner_parts.append(f"**{tc}** — {desc}")
 
 active_count = len(df[df["category"].isin(ACTIVE_CATEGORIES)])
-st.markdown(f"#### {'  ·  '.join(banner_parts)}  ·  {active_count} findings")
+gt_count_total = df["is_gt"].sum()
+gt_label = f"  ·  <span class='gt-badge'>{gt_count_total} GT</span>" if gt_count_total else ""
+st.markdown(
+    f"#### {'  ·  '.join(banner_parts)}  ·  {active_count} findings{gt_label}",
+    unsafe_allow_html=True,
+)
 
 # PDF download links
 pdf_cols = st.columns(len(tc_pdf_map)) if tc_pdf_map else []
@@ -234,9 +318,43 @@ for i, (tc, path) in enumerate(sorted(tc_pdf_map.items(), key=lambda x: tc_sort_
             )
 
 # ---------------------------------------------------------------------------
-# Category lock status
+# Category lock status & CSV Download
 # ---------------------------------------------------------------------------
 cat_statuses = cached_category_statuses()
+
+# CSV download button - only includes locked categories' golden findings
+locked_cats = [cat for cat, status in cat_statuses.items() if status.get("status") == "locked"]
+
+if locked_cats:
+    # Filter to only locked categories
+    locked_df = df[df["category"].isin(locked_cats)].copy()
+
+    if not locked_df.empty:
+        # Select columns for CSV export
+        export_cols = [
+            "tc_number", "filename", "page", "category", "sub_bucket",
+            "artifact_type", "sentence", "rule_citation", "observations",
+            "recommendations", "summary"
+        ]
+        export_df = locked_df[[col for col in export_cols if col in locked_df.columns]]
+
+        csv_data = export_df.to_csv(index=False)
+
+        st.download_button(
+            f"📥 Download Golden CSV ({len(locked_cats)} locked categories, {len(export_df)} findings)",
+            data=csv_data,
+            file_name=f"golden_dataset_{selected_run_label}.csv",
+            mime="text/csv",
+            key="download_golden_csv",
+            use_container_width=False,
+        )
+        st.caption(f"✓ CSV includes only **locked** categories with all soft-deletes and sec_typographycheck filtered out.")
+    else:
+        st.info("No locked findings available for download yet.")
+else:
+    st.info("Lock at least one category to enable CSV download of golden findings.")
+
+st.divider()
 
 # ---------------------------------------------------------------------------
 # Tabs: Curate | Browse Details | Add Ground Truth
@@ -265,13 +383,17 @@ with tab_curate:
         ["theme", "sub_bucket", "tc_number"]
     ).reset_index(drop=True)
 
+    # GT rows get no delete checkbox; non-GT get one
     display_df.insert(0, "delete", False)
+    # Force GT rows to never have delete checked
+    display_df.loc[display_df["is_gt"] == True, "delete"] = False
 
-    visible_cols = ["delete", "page", "sentence"]
+    visible_cols = ["delete", "page", "artifact_type", "sentence"]
 
     col_config = {
-        "delete": st.column_config.CheckboxColumn("Delete", width="small"),
+        "delete": st.column_config.CheckboxColumn("Del", width="small"),
         "page": st.column_config.NumberColumn("Pg", width="small", disabled=True),
+        "artifact_type": st.column_config.TextColumn("Source", width="small", disabled=True),
         "sentence": st.column_config.TextColumn("sentence", width="large", disabled=True),
     }
 
@@ -282,6 +404,15 @@ with tab_curate:
 
     for theme in theme_list:
         theme_df = display_df[display_df["theme"] == theme]
+
+        # Extra safety: ensure soft-deleted items are filtered out from sub-tables
+        if deletion_keys:
+            theme_mask = [
+                (r["_doc_id"], r["_source"], r["_art_key"], r["_section_idx"]) not in deletion_keys
+                for _, r in theme_df.iterrows()
+            ]
+            theme_df = theme_df[theme_mask].reset_index(drop=True)
+
         count_in_theme = len(theme_df)
 
         # Get the category name for this theme (for lock status)
@@ -338,12 +469,18 @@ with tab_curate:
 
                     safe_id = f"sb-{css_safe(theme)}-{css_safe(sb_name)}"
 
-                    # Colored header + CSS to tint the data editor rows
+                    gt_count = int(sb_df["is_gt"].sum())
+                    label_parts = f"<b>{sb_name}</b> &nbsp;({len(sb_df)}"
+                    if gt_count:
+                        label_parts += f" &middot; <span class='gt-badge'>{gt_count} GT</span>"
+                    label_parts += ")"
+
+                    # Colored header
                     st.markdown(
                         f"<div class='{safe_id}' style='border-left:4px solid {sb_color}; "
                         f"background:{sb_color}22; padding:4px 10px; "
                         f"margin:4px 0 0 0; border-radius:3px 3px 0 0;'>"
-                        f"<b>{sb_name}</b> &nbsp;({len(sb_df)})</div>"
+                        f"{label_parts}</div>"
                         f"<style>"
                         f".{safe_id} + div [data-testid='stDataFrame'] {{"
                         f"  background: {sb_color}0d; border-left: 3px solid {sb_color};"
@@ -355,26 +492,49 @@ with tab_curate:
 
                     editor_key = f"golden_editor_{theme}_{sb_name}"
 
-                    if is_locked:
-                        # Locked: read-only, no delete checkbox
-                        st.dataframe(
-                            sb_df[["page", "sentence"]],
-                            use_container_width=True,
-                            hide_index=True,
-                        )
-                        all_theme_edited.append((sb_df, None))
-                    else:
-                        edited = st.data_editor(
-                            sb_df[visible_cols],
-                            use_container_width=True,
-                            hide_index=True,
-                            num_rows="fixed",
-                            key=editor_key,
-                            column_config=col_config,
-                        )
-                        all_theme_edited.append((sb_df, edited))
+                    # GT rows: inline green HTML rows (no delete)
+                    gt_rows_df = sb_df[sb_df["is_gt"] == True]
+                    non_gt_df = sb_df[sb_df["is_gt"] == False]
 
-                    # Detail popovers with delete + confirmation
+                    for _, gt_r in gt_rows_df.iterrows():
+                        sent_preview = str(gt_r["sentence"])[:120]
+                        st.markdown(
+                            f"<div style='background:#c8f7c5; padding:5px 10px; "
+                            f"margin:1px 0; border-radius:3px; display:flex; "
+                            f"align-items:center; gap:10px; font-size:0.9em;'>"
+                            f"<span style='color:#2d6a2e; font-weight:700; "
+                            f"min-width:28px;'>Pg {gt_r['page']}</span>"
+                            f"<span>{sent_preview}</span>"
+                            f"<span class='gt-badge' style='margin-left:auto; "
+                            f"white-space:nowrap;'>GT</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    # Non-GT rows: data_editor with delete checkbox
+                    if is_locked:
+                        if not non_gt_df.empty:
+                            st.dataframe(
+                                non_gt_df[["page", "sentence"]],
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        all_theme_edited.append((non_gt_df, None))
+                    else:
+                        if not non_gt_df.empty:
+                            edited = st.data_editor(
+                                non_gt_df[visible_cols],
+                                use_container_width=True,
+                                hide_index=True,
+                                num_rows="fixed",
+                                key=editor_key,
+                                column_config=col_config,
+                            )
+                            all_theme_edited.append((non_gt_df, edited))
+                        else:
+                            all_theme_edited.append((non_gt_df, None))
+
+                    # Detail popovers
                     sb_rows = []
                     for _, r in sb_df.iterrows():
                         sb_rows.append({
@@ -390,20 +550,31 @@ with tab_curate:
                             "_source": r["_source"],
                             "_art_key": r["_art_key"],
                             "_section_idx": r["_section_idx"],
+                            "is_gt": r.get("is_gt", False),
                         })
 
                     detail_cols = st.columns(min(len(sb_rows), 6))
                     for j, rd in enumerate(sb_rows):
                         pop_key = f"pop_{theme}_{sb_name}_{j}"
                         confirm_key = f"pop_confirm_{pop_key}"
+                        is_gt_finding = rd.get("is_gt", False)
+                        pop_label = f"Pg {rd['page']}"
                         with detail_cols[j % len(detail_cols)]:
-                            with st.popover(f"Pg {rd['page']}", use_container_width=True):
+                            with st.popover(pop_label, use_container_width=True):
+                                if is_gt_finding:
+                                    st.markdown(
+                                        "<span class='gt-badge'>Ground Truth (Validated)</span>",
+                                        unsafe_allow_html=True,
+                                    )
+                                st.markdown(f"> {rd['sentence']}")
                                 st.markdown(f"**rule_citation:** {rd['rule_citation']}")
                                 st.markdown(f"**observations:** {rd['observations']}")
                                 st.markdown(f"**recommendations:** {rd['recommendations']}")
                                 st.markdown(f"**summary:** {rd['summary']}")
                                 st.divider()
-                                if is_locked:
+                                if is_gt_finding:
+                                    st.caption("Ground truth — frozen, cannot be deleted.")
+                                elif is_locked:
                                     st.caption("Category is locked — no deletions.")
                                 elif not st.session_state.get(confirm_key, False):
                                     if st.button(
@@ -434,13 +605,18 @@ with tab_curate:
                                         st.session_state[confirm_key] = False
                                         st.rerun()
 
-            # Bulk delete via checkboxes (only if not locked)
+            # Bulk delete via checkboxes (only if not locked, skip GT rows)
             if not is_locked:
                 theme_marked_indices = []
                 for sb_df, edited in all_theme_edited:
                     if edited is not None:
                         marked = edited[edited["delete"] == True]
-                        theme_marked_indices.extend(marked.index.tolist())
+                        # Protect GT rows — never allow deletion
+                        non_gt_marked = [
+                            idx for idx in marked.index.tolist()
+                            if not display_df.loc[idx, "is_gt"]
+                        ]
+                        theme_marked_indices.extend(non_gt_marked)
 
                 marked_count = len(theme_marked_indices)
                 pending_key = f"pending_delete_{theme}"
@@ -536,21 +712,33 @@ with tab_details:
     browse_df = df[df["category"].isin(ACTIVE_CATEGORIES)]
 
     for i, row in browse_df.iterrows():
-        status = (
-            "Accepted" if row["accept"]
-            else "Rejected" if row["reject"]
-            else "Accept w/ Changes" if row["accept_with_changes"]
-            else "Unreviewed"
-        )
-        color = {
-            "Accepted": "green", "Rejected": "red",
-            "Accept w/ Changes": "orange", "Unreviewed": "gray",
-        }[status]
+        is_gt_row = row.get("is_gt", False)
+
+        if is_gt_row:
+            status = "Ground Truth"
+            color = "green"
+        else:
+            status = (
+                "Accepted" if row["accept"]
+                else "Rejected" if row["reject"]
+                else "Accept w/ Changes" if row["accept_with_changes"]
+                else "Unreviewed"
+            )
+            color = {
+                "Accepted": "green", "Rejected": "red",
+                "Accept w/ Changes": "orange", "Unreviewed": "gray",
+            }[status]
         tc_label, tc_desc = short_name(row.get("filename", ""))
         preview = str(row["sentence"])[:80]
         label = f":{color}[**{status}**] {tc_label} | {row['artifact_type']} — {preview}"
 
         with st.expander(label, expanded=False):
+            if is_gt_row:
+                st.markdown(
+                    "<span class='gt-badge'>Ground Truth (Validated)</span>",
+                    unsafe_allow_html=True,
+                )
+            st.markdown(f"> {row['sentence']}")
             col_a, col_b = st.columns(2)
             with col_a:
                 st.markdown(f"**{tc_label}** — {tc_desc}")
@@ -564,41 +752,43 @@ with tab_details:
                 if row.get("reject_reason"):
                     st.markdown(f"**reject_reason:** :red[{row['reject_reason']}]")
 
-            del_key = f"detail_del_{i}"
-            confirm_key = f"detail_confirm_{i}"
-
-            # Check if this category is locked
-            cat_name_browse = row["category"]
-            is_cat_locked = cat_statuses.get(cat_name_browse, {}).get("status") == "locked"
-
-            if is_cat_locked:
-                st.caption("Category is locked — no deletions.")
+            if is_gt_row:
+                st.caption("Ground truth — frozen, cannot be deleted.")
             else:
-                if st.button("Delete this finding", key=del_key, type="primary"):
-                    st.session_state[confirm_key] = True
+                del_key = f"detail_del_{i}"
+                confirm_key = f"detail_confirm_{i}"
 
-                if st.session_state.get(confirm_key, False):
-                    st.warning("Soft-delete this finding?")
-                    c1, c2, _ = st.columns([1, 1, 4])
-                    with c1:
-                        if st.button("Confirm", key=f"detail_yes_{i}", type="primary"):
-                            soft_delete_batch([{
-                                "_doc_id": row["_doc_id"],
-                                "_source": row["_source"],
-                                "_art_key": row["_art_key"],
-                                "_section_idx": row["_section_idx"],
-                                "category": row.get("category", ""),
-                                "sub_bucket": row.get("sub_bucket", ""),
-                                "sentence": row.get("sentence", ""),
-                            }])
-                            st.session_state[confirm_key] = False
-                            st.session_state["detail_action"] = "Soft-deleted 1 finding."
-                            st.cache_data.clear()
-                            st.rerun()
-                    with c2:
-                        if st.button("Cancel", key=f"detail_no_{i}"):
-                            st.session_state[confirm_key] = False
-                            st.rerun()
+                cat_name_browse = row["category"]
+                is_cat_locked = cat_statuses.get(cat_name_browse, {}).get("status") == "locked"
+
+                if is_cat_locked:
+                    st.caption("Category is locked — no deletions.")
+                else:
+                    if st.button("Delete this finding", key=del_key, type="primary"):
+                        st.session_state[confirm_key] = True
+
+                    if st.session_state.get(confirm_key, False):
+                        st.warning("Soft-delete this finding?")
+                        c1, c2, _ = st.columns([1, 1, 4])
+                        with c1:
+                            if st.button("Confirm", key=f"detail_yes_{i}", type="primary"):
+                                soft_delete_batch([{
+                                    "_doc_id": row["_doc_id"],
+                                    "_source": row["_source"],
+                                    "_art_key": row["_art_key"],
+                                    "_section_idx": row["_section_idx"],
+                                    "category": row.get("category", ""),
+                                    "sub_bucket": row.get("sub_bucket", ""),
+                                    "sentence": row.get("sentence", ""),
+                                }])
+                                st.session_state[confirm_key] = False
+                                st.session_state["detail_action"] = "Soft-deleted 1 finding."
+                                st.cache_data.clear()
+                                st.rerun()
+                        with c2:
+                            if st.button("Cancel", key=f"detail_no_{i}"):
+                                st.session_state[confirm_key] = False
+                                st.rerun()
 
 
 # ========================== TAB: ADD GROUND TRUTH ==========================

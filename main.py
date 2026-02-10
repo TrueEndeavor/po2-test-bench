@@ -60,18 +60,19 @@ with st.sidebar:
     existing_count = golden_coll.count_documents({})
     st.metric("Golden Records", existing_count)
 
-    # Auto-increment silver version: silver_v1, silver_v2, ...
+    # Auto-increment golden version: golden_v1, golden_v2, ...
     existing_labels = golden_coll.distinct("run_label")
-    silver_versions = [
+    golden_versions = [
         int(l.split("_v")[1])
         for l in existing_labels
-        if l.startswith("silver_v") and l.split("_v")[1].isdigit()
+        if l.startswith("golden_v") and l.split("_v")[1].isdigit()
     ]
-    next_version = max(silver_versions, default=0) + 1
+    next_version = max(golden_versions, default=0) + 1
 
     run_label = st.text_input(
-        "Silver Baseline",
-        value=f"silver_v{next_version}",
+        "Golden Baseline Label",
+        value=f"golden_v{next_version}",
+        help="This will be your curated golden dataset after filtering sec_typographycheck and soft-deleting incorrect findings",
     )
 
     capture = st.button(
