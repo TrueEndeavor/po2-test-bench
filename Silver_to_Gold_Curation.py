@@ -188,16 +188,26 @@ run_labels = sorted(
 )
 golden_labels = [rl for rl in run_labels if rl.startswith("golden_v")]
 
-st.markdown("## 🥇 Silver-to-Gold Curation")
+col_title, col_baseline = st.columns([3, 1])
 
-if golden_labels:
-    selected_run_label = st.selectbox(
-        "Golden Baseline",
-        golden_labels,
-        help="Select the golden baseline to curate. Only golden_v* runs are shown.",
-    )
-else:
-    st.error("No golden baseline found. Please run 'Capture Golden Baseline' from main.py first with a golden_v* label.")
+with col_title:
+    st.markdown("## 🥇 Silver-to-Gold Curation")
+
+with col_baseline:
+    st.write("")  # Spacer for alignment
+    if golden_labels:
+        selected_run_label = st.selectbox(
+            "Baseline",
+            golden_labels,
+            help="Select the golden baseline to curate",
+            label_visibility="collapsed",
+        )
+    else:
+        st.error("No baseline found")
+        st.stop()
+
+if not golden_labels:
+    st.error("No golden baseline found. Use the **Capture Baseline** page to create one.")
     st.stop()
 
 # Filter records by selected run label
