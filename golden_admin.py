@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -44,6 +45,7 @@ def css_safe(name):
 
 from modules.db import (
     get_golden_outputs_collection,
+    get_test_documents_collection,
     soft_delete_batch,
     load_deletion_keys,
     get_deletion_count,
@@ -52,9 +54,10 @@ from modules.db import (
     unlock_category,
     get_category_statuses,
 )
-from modules.parsers import extract_findings_for_review, cat_to_theme
+from modules.parsers import extract_findings_for_review, cat_to_theme, parse_findings_summary
 from modules.naming import tc_sort_key, short_name
 from modules.config import ARTIFACT_TYPES, CATEGORY_THEMES, THEME_ORDER, TEST_DOCS_DIR
+from modules.api import submit_from_mongo, submit_document
 
 # ---------------------------------------------------------------------------
 # Ground truth loading & matching
@@ -357,9 +360,11 @@ else:
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Tabs: Curate | Browse Details | Add Ground Truth
+# Tabs: Curate | Browse Details | Capture Golden | Add Ground Truth
 # ---------------------------------------------------------------------------
-tab_curate, tab_details, tab_add = st.tabs(["Curate", "Browse Details", "Add Ground Truth"])
+tab_curate, tab_details, tab_capture, tab_add = st.tabs([
+    "Curate", "Browse Details", "Capture Golden Baseline", "Add Ground Truth"
+])
 
 # ========================== TAB: CURATE ====================================
 
@@ -790,6 +795,130 @@ with tab_details:
                                 st.session_state[confirm_key] = False
                                 st.rerun()
 
+
+# ========================== TAB: CAPTURE GOLDEN BASELINE ===================
+with tab_capture:
+    st.info(
+        "**Capture Golden Baseline** — Run all test cases through the API and save outputs "
+        "as a new golden baseline for curation."
+    )
+
+    golden_coll = get_golden_outputs_collection()
+    test_docs_coll = get_test_documents_collection()
+
+    # Auto-increment golden version
+    existing_labels = golden_coll.distinct("run_label")
+    golden_versions = [
+        int(l.split("_v")[1])
+        for l in existing_labels
+        if l.startswith("golden_v") and l.split("_v")[1].isdigit()
+    ]
+    next_version = max(golden_versions, default=0) + 1
+
+    col_label, col_btn = st.columns([2, 1])
+
+    with col_label:
+        new_run_label = st.text_input(
+            "Baseline Label",
+            value=f"golden_v{next_version}",
+            help="This will be your curated golden dataset after filtering and soft-deleting incorrect findings",
+            key="capture_run_label",
+        )
+
+    with col_btn:
+        st.write("")  # Spacer
+        st.write("")  # Spacer
+        capture_btn = st.button(
+            "▶ Capture All TCs",
+            type="primary",
+            use_container_width=True,
+            key="capture_golden_btn",
+        )
+
+    if capture_btn:
+        # Load test documents
+        test_docs = list(test_docs_coll.find().sort("filename", 1))
+        use_mongo = len(test_docs) > 0
+
+        if not use_mongo:
+            pdf_files = sorted(TEST_DOCS_DIR.glob("*.pdf"))
+            if not pdf_files:
+                st.error("No test documents found.")
+                st.stop()
+            items = sorted(pdf_files, key=lambda x: tc_sort_key(x.name))
+        else:
+            items = sorted(test_docs, key=lambda x: tc_sort_key(x["filename"]))
+
+        doc_count = len(items)
+
+        st.divider()
+        st.subheader(f"Capturing {new_run_label}...")
+
+        # Create placeholders for real-time updates
+        progress_bar = st.progress(0, text="Starting baseline capture...")
+        status_text = st.empty()
+        results_area = st.container()
+
+        succeeded = 0
+        failed = 0
+
+        for i, item in enumerate(items):
+            name = item["filename"] if use_mongo else item.name
+            tc, desc = short_name(name)
+
+            # Update status text
+            status_text.info(f"⏳ Running **{tc}** — {desc} ({i + 1}/{doc_count})...")
+
+            try:
+                if use_mongo:
+                    resp, meta = submit_from_mongo(item)
+                else:
+                    resp, meta = submit_document(item)
+
+                if resp.status_code == 200:
+                    full_response = json.loads(resp.text)
+                    findings = parse_findings_summary(resp.text)
+
+                    golden_coll.insert_one({
+                        "filename": name,
+                        "tc_number": tc,
+                        "run_label": new_run_label,
+                        "api_response": full_response,
+                        "findings_summary": findings,
+                        "total_findings": sum(findings.values()),
+                        "status_code": resp.status_code,
+                        "metadata": meta,
+                        "created_at": datetime.utcnow(),
+                    })
+                    succeeded += 1
+
+                    # Show result immediately
+                    with results_area:
+                        st.success(f"✓ **{tc}** — {sum(findings.values())} findings captured — {desc}")
+                else:
+                    failed += 1
+                    with results_area:
+                        st.error(f"✗ **{tc}** — HTTP {resp.status_code} — {desc}")
+            except Exception as e:
+                failed += 1
+                with results_area:
+                    st.error(f"✗ **{tc}** — {str(e)[:100]} — {desc}")
+
+            # Update progress bar after each TC
+            progress_bar.progress(
+                (i + 1) / doc_count,
+                text=f"Progress: {i + 1}/{doc_count} completed ({succeeded} ✓, {failed} ✗)",
+            )
+
+        # Final status
+        status_text.success(
+            f"🎉 **Capture Complete!** {succeeded} succeeded, {failed} failed out of {doc_count} test cases. "
+            f"Refresh the page to start curating **{new_run_label}**."
+        )
+
+        if st.button("🔄 Refresh Page Now", type="primary", key="refresh_after_capture"):
+            st.cache_data.clear()
+            st.rerun()
 
 # ========================== TAB: ADD GROUND TRUTH ==========================
 with tab_add:
