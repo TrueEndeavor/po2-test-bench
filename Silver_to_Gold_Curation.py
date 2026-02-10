@@ -86,7 +86,11 @@ def is_ground_truth(tc_number, page, sentence, gt_keys):
     if not gt_keys:
         return False
     tc = str(tc_number).strip()
-    pg = int(page) if pd.notna(page) else 0
+    # Handle empty strings and NaN values
+    try:
+        pg = int(page) if (pd.notna(page) and str(page).strip()) else 0
+    except (ValueError, TypeError):
+        pg = 0
     sent = str(sentence).strip().lower()
     # Exact prefix match (first 50 chars)
     if (tc, pg, sent[:50]) in gt_keys:
