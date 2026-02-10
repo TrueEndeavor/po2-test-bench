@@ -10,25 +10,65 @@ from modules.parsers import cat_to_theme, parse_findings_summary, extract_findin
 from modules.db import get_results_collection, save_all_changes
 from modules.api import submit_from_mongo, submit_document
 from modules.naming import short_name
+from modules.ground_truth import calculate_gt_metrics, get_missing_gt_findings
 
 
-def render_metrics_bar(doc_count, results):
-    """Top-level pass/fail/pending metrics."""
+def render_metrics_bar(doc_count, results, gt_keys=None, gt_df=None):
+    """Top-level consolidated GT metrics bar."""
     now_str = datetime.now().strftime("%b %d, %Y  %I:%M %p")
-    passed = sum(1 for r in results.values() if r.get("success"))
-    failed = sum(1 for r in results.values() if not r.get("success"))
-    pending = doc_count - len(results)
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Test Cases", doc_count)
-    m2.metric("Passed", passed)
-    m3.metric("Failed", failed)
-    m4.metric("Pending", pending)
+    # Count run status
+    run_count = len([r for r in results.values() if r.get("success")])
+    pending = doc_count - run_count
 
-    st.caption(f"NW Testing Team | {now_str} | ~5 min per test case")
+    # Aggregate GT metrics across all runs
+    has_gt = gt_keys is not None and gt_df is not None and not gt_df.empty
+
+    if has_gt and run_count > 0:
+        agg_gt = {
+            "tp": 0, "partial_tp": 0.0, "fp": 0, "fn": 0,
+            "expected": 0, "weighted_tp": 0.0
+        }
+
+        for r in results.values():
+            if r.get("success") and r.get("gt_metrics"):
+                metrics = r["gt_metrics"]
+                agg_gt["tp"] += metrics.get("tp", 0)
+                agg_gt["partial_tp"] += metrics.get("partial_tp", 0.0)
+                agg_gt["fp"] += metrics.get("fp", 0)
+                agg_gt["fn"] += metrics.get("fn", 0)
+                agg_gt["expected"] += metrics.get("expected", 0)
+                agg_gt["weighted_tp"] += metrics.get("weighted_tp", 0.0)
+
+        # Calculate consolidated score
+        score_pct = (agg_gt["weighted_tp"] / agg_gt["expected"] * 100) if agg_gt["expected"] > 0 else 0.0
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("TCs Run", f"{run_count}/{doc_count}")
+        m2.metric("GT Expected", agg_gt["expected"])
+        m3.metric("Score", f"{score_pct:.1f}%", help="Weighted TP / GT Expected")
+        m4.metric("Exact Match", agg_gt["tp"])
+        m5.metric("Partial", f"{agg_gt['partial_tp']:.0f}")
+
+        # Second row
+        m6, m7, m8, m9, m10 = st.columns(5)
+        m6.metric("False Positive", agg_gt["fp"])
+        m7.metric("False Negative", agg_gt["fn"])
+        m8.metric("Weighted TP", f"{agg_gt['weighted_tp']:.1f}")
+        m9.metric("Pending", pending)
+        m10.metric("", "")  # Empty for spacing
+    else:
+        # No GT data yet, show basic metrics
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total TCs", doc_count)
+        m2.metric("Run", run_count)
+        m3.metric("Pending", pending)
+        m4.metric("Ready", "Run TCs to see GT metrics")
+
+    st.caption(f"NW Testing Team | {now_str}")
 
 
-def render_tc_buttons(items, results, use_mongo):
+def render_tc_buttons(items, results, use_mongo, gt_keys=None, gt_df=None, run_name=None):
     """Left pane: clickable test-case buttons that trigger API submission."""
     st.markdown("#### Test Cases")
 
@@ -63,6 +103,7 @@ def render_tc_buttons(items, results, use_mongo):
                     success = resp.status_code == 200
                     full_response = {}
                     mongo_doc_id = None
+                    gt_metrics = None
 
                     if success:
                         full_response = json.loads(resp.text)
@@ -76,6 +117,21 @@ def render_tc_buttons(items, results, use_mongo):
                         if mongo_doc:
                             mongo_doc_id = str(mongo_doc["_id"])
 
+                        # Calculate GT metrics if GT data is available
+                        if gt_keys is not None and gt_df is not None and not gt_df.empty:
+                            # Extract findings from the response
+                            findings_list = []
+                            for source_key in ["raw_output", "sequential_reasoner"]:
+                                source_data = full_response.get(source_key, {})
+                                if isinstance(source_data, dict) and source_data:
+                                    findings = extract_findings_for_review(mongo_doc_id or "temp", source_data, source_key)
+                                    if findings:
+                                        findings_list = findings
+                                        break
+
+                            if findings_list:
+                                gt_metrics = calculate_gt_metrics(findings_list, gt_keys, gt_df, tc)
+
                     st.session_state["results"][name] = {
                         "status_code": resp.status_code,
                         "success": success,
@@ -83,6 +139,8 @@ def render_tc_buttons(items, results, use_mongo):
                         "findings": parse_findings_summary(resp.text) if success else {},
                         "full_response": full_response,
                         "mongo_doc_id": mongo_doc_id,
+                        "gt_metrics": gt_metrics,
+                        "run_name": run_name or "unknown",
                         "timestamp": datetime.now().isoformat(),
                     }
                 except Exception as e:
@@ -93,12 +151,14 @@ def render_tc_buttons(items, results, use_mongo):
                         "findings": {},
                         "full_response": {},
                         "mongo_doc_id": None,
+                        "gt_metrics": None,
+                        "run_name": run_name or "unknown",
                         "timestamp": datetime.now().isoformat(),
                     }
             st.rerun()
 
 
-def render_drilldown_panel(results, items, use_mongo):
+def render_drilldown_panel(results, items, use_mongo, gt_keys=None, gt_df=None):
     """Right pane: summary or theme drill-down with editable review."""
     if not results:
         st.markdown("#### Results Dashboard")
@@ -109,18 +169,28 @@ def render_drilldown_panel(results, items, use_mongo):
 
     if drill_level == "theme":
         _render_theme_level(results, items, use_mongo)
+    elif drill_level == "gt_comparison":
+        _render_gt_comparison(results, items, use_mongo, gt_keys, gt_df)
     else:
-        _render_summary_level(results, items, use_mongo)
+        _render_summary_level(results, items, use_mongo, gt_keys, gt_df)
 
 
 # ---------------------------------------------------------------------------
 # Level 1: Summary
 # ---------------------------------------------------------------------------
-def _render_summary_level(results, items, use_mongo):
+def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
     st.markdown("#### Results Dashboard")
 
     all_themes = Counter()
     total_findings = 0
+    has_gt = gt_keys is not None and gt_df is not None and not gt_df.empty
+
+    # Aggregate GT metrics across all test cases
+    agg_gt = {
+        "tp": 0, "partial_tp": 0.0, "fp": 0, "fn": 0,
+        "suppressed": 0, "weighted_tp": 0.0,
+        "expected": 0, "found": 0, "relevant_found": 0
+    }
 
     for r in results.values():
         if r.get("success") and r.get("findings"):
@@ -129,7 +199,43 @@ def _render_summary_level(results, items, use_mongo):
                 all_themes[theme] += count
                 total_findings += count
 
+        # Aggregate GT metrics
+        if has_gt and r.get("gt_metrics"):
+            metrics = r["gt_metrics"]
+            agg_gt["tp"] += metrics.get("tp", 0)
+            agg_gt["partial_tp"] += metrics.get("partial_tp", 0.0)
+            agg_gt["fp"] += metrics.get("fp", 0)
+            agg_gt["fn"] += metrics.get("fn", 0)
+            agg_gt["suppressed"] += metrics.get("suppressed", 0)
+            agg_gt["weighted_tp"] += metrics.get("weighted_tp", 0.0)
+            agg_gt["expected"] += metrics.get("expected", 0)
+            agg_gt["found"] += metrics.get("found", 0)
+            agg_gt["relevant_found"] += metrics.get("relevant_found", 0)
+
+    # Display GT metrics summary
+    if has_gt and agg_gt["expected"] > 0:
+        st.markdown("### Ground Truth Comparison")
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("GT Expected", agg_gt["expected"], help="Total findings in ground truth")
+        col2.metric("API Found", agg_gt["relevant_found"], help="Findings from GT themes only")
+        col3.metric("Suppressed", agg_gt["suppressed"], help="Findings from non-GT themes (ignored)")
+        col4.metric("Total API", agg_gt["found"], help="All findings from API")
+
+        col5, col6, col7, col8 = st.columns(4)
+        col5.metric("Exact Matches (TP)", agg_gt["tp"], help="Full credit: Exact sentence match")
+        col6.metric("Partial Matches", f"{agg_gt['partial_tp']:.1f}", help="Partial credit: Same theme + page")
+        col7.metric("False Positives", agg_gt["fp"], help="Valid theme but wrong page/context")
+        col8.metric("False Negatives", agg_gt["fn"], help="In GT but NOT found by API")
+
+        if st.button("📊 View Detailed GT Comparison", use_container_width=True):
+            st.session_state["drill_level"] = "gt_comparison"
+            st.rerun()
+
+        st.divider()
+
     if total_findings > 0:
+        st.markdown("### Findings by Theme")
         st.metric("Total Findings", total_findings)
 
         st.markdown("**By Theme** *(click View to drill down)*")
@@ -162,7 +268,14 @@ def _render_summary_level(results, items, use_mongo):
                 f"{t}({n})" for t, n in
                 sorted(tc_themes.items(), key=lambda x: THEME_ORDER.get(x[0], 99))[:3]
             )
-            st.caption(f"\u2705 **{tc}**: {count} findings \u2014 {top}")
+
+            # Add GT metrics if available
+            gt_suffix = ""
+            if r.get("gt_metrics"):
+                gt_m = r["gt_metrics"]
+                gt_suffix = f" | GT: {gt_m['tp']}TP/{gt_m['fp']}FP/{gt_m['fn']}FN"
+
+            st.caption(f"\u2705 **{tc}**: {count} findings \u2014 {top}{gt_suffix}")
         elif r["success"]:
             st.caption(f"\u2705 **{tc}**: No findings")
         else:
@@ -284,3 +397,123 @@ def _render_theme_level(results, items, use_mongo):
                 st.markdown(f"**Summary:** {row['summary']}")
                 if row["reject_reason"]:
                     st.markdown(f"**Reject Reason:** :red[{row['reject_reason']}]")
+
+
+# ---------------------------------------------------------------------------
+# Level 3: Ground Truth Comparison
+# ---------------------------------------------------------------------------
+def _render_gt_comparison(results, items, use_mongo, gt_keys, gt_df):
+    """Detailed ground truth comparison view."""
+    col_back, col_title = st.columns([1, 5])
+    with col_back:
+        if st.button("\u2190 Back"):
+            st.session_state["drill_level"] = "summary"
+            st.rerun()
+    with col_title:
+        st.subheader("Ground Truth Comparison")
+
+    if not gt_keys or gt_df.empty:
+        st.warning("No ground truth data available.")
+        return
+
+    # Collect GT comparison data for all test cases
+    comparison_rows = []
+
+    for item in items:
+        name = item["filename"] if use_mongo else item.name
+        tc, desc = short_name(name)
+        r = results.get(name)
+
+        if not r or not r.get("success"):
+            continue
+
+        gt_metrics = r.get("gt_metrics")
+        if not gt_metrics:
+            continue
+
+        comparison_rows.append({
+            "TC": tc,
+            "Description": desc,
+            "GT Expected": gt_metrics["expected"],
+            "API Found": gt_metrics.get("relevant_found", gt_metrics["found"]),
+            "Exact (TP)": gt_metrics["tp"],
+            "Partial": f"{gt_metrics.get('partial_tp', 0):.1f}",
+            "FP": gt_metrics["fp"],
+            "FN": gt_metrics["fn"],
+            "Suppressed": gt_metrics.get("suppressed", 0),
+        })
+
+    if not comparison_rows:
+        st.info("No GT comparison data available. Run test cases to see GT metrics.")
+        return
+
+    # Display comparison table
+    df_comp = pd.DataFrame(comparison_rows)
+    st.markdown("### Summary Table")
+    st.dataframe(df_comp, use_container_width=True, hide_index=True)
+
+    # Per-TC detailed view
+    st.markdown("---")
+    st.markdown("### Per Test Case Details")
+
+    for item in items:
+        name = item["filename"] if use_mongo else item.name
+        tc, desc = short_name(name)
+        r = results.get(name)
+
+        if not r or not r.get("success") or not r.get("gt_metrics"):
+            continue
+
+        gt_metrics = r["gt_metrics"]
+        detailed_findings = gt_metrics.get("detailed_findings", [])
+
+        with st.expander(f"{tc} — {desc}", expanded=False):
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("GT Expected", gt_metrics["expected"])
+            col2.metric("API Found", gt_metrics.get("relevant_found", gt_metrics["found"]))
+            col3.metric("Exact Matches", gt_metrics["tp"])
+            col4.metric("Partial Matches", f"{gt_metrics.get('partial_tp', 0):.1f}")
+
+            # Show findings with GT status
+            if detailed_findings:
+                st.markdown("#### API Findings")
+                df_findings = pd.DataFrame([
+                    {
+                        "GT Status": f.get("gt_status", "N/A"),
+                        "Page": f.get("page", ""),
+                        "Sentence": str(f.get("sentence", ""))[:100],
+                        "Category": f.get("category", ""),
+                    }
+                    for f in detailed_findings
+                ])
+
+                # Style TP and FP differently
+                st.dataframe(
+                    df_findings,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "GT Status": st.column_config.TextColumn("GT Status", width="small"),
+                        "Page": st.column_config.TextColumn("Page", width="small"),
+                        "Sentence": st.column_config.TextColumn("Sentence", width="large"),
+                        "Category": st.column_config.TextColumn("Category", width="medium"),
+                    }
+                )
+
+            # Show missing GT findings (false negatives)
+            if gt_metrics["fn"] > 0:
+                st.markdown(f"#### Missing Findings (FN: {gt_metrics['fn']})")
+                st.caption("These findings are in the ground truth but were NOT detected by the API:")
+
+                missing = get_missing_gt_findings(gt_df, tc, detailed_findings, gt_keys)
+                if missing:
+                    df_missing = pd.DataFrame([
+                        {
+                            "Page": m.get("page", ""),
+                            "Sentence": str(m.get("sentence", ""))[:100],
+                            "Category": m.get("category", ""),
+                            "Sub Bucket": m.get("sub_bucket", ""),
+                        }
+                        for m in missing
+                    ])
+                    st.dataframe(df_missing, use_container_width=True, hide_index=True)

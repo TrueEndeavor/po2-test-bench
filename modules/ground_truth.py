@@ -1,0 +1,231 @@
+"""
+Ground truth loading and comparison utilities for PO2 Test Bench.
+"""
+from pathlib import Path
+import pandas as pd
+
+
+GROUND_TRUTH_CSV = Path(__file__).resolve().parent.parent / "ground_truth.csv"
+
+
+def load_ground_truth():
+    """Load validated ground truth CSV and return set of (tc, page, sentence_prefix) keys."""
+    if not GROUND_TRUTH_CSV.exists():
+        return set(), pd.DataFrame()
+
+    gt_df = pd.read_csv(GROUND_TRUTH_CSV)
+    gt_df.columns = gt_df.columns.str.strip()
+
+    # Build lookup keys: (tc_number, page, first 50 chars of non-compliant sentence)
+    keys = set()
+    for _, row in gt_df.iterrows():
+        tc = str(row.get("TC Id", "")).strip()
+        page = int(row.get("Page Number", 0)) if pd.notna(row.get("Page Number")) else 0
+        sentence = str(row.get("Non compliant", "")).strip()
+        if tc and sentence:
+            keys.add((tc, page, sentence[:50].lower()))
+
+    return keys, gt_df
+
+
+def is_ground_truth(tc_number, page, sentence, gt_keys):
+    """Check if a finding matches any ground truth entry."""
+    if not gt_keys:
+        return False
+
+    tc = str(tc_number).strip()
+
+    # Handle empty strings and NaN values
+    try:
+        pg = int(page) if (pd.notna(page) and str(page).strip()) else 0
+    except (ValueError, TypeError):
+        pg = 0
+
+    sent = str(sentence).strip().lower()
+
+    # Exact prefix match (first 50 chars)
+    if (tc, pg, sent[:50]) in gt_keys:
+        return True
+
+    # Fallback: check if any GT sentence prefix is contained in the finding
+    for gt_tc, gt_pg, gt_prefix in gt_keys:
+        if tc == gt_tc and pg == gt_pg and gt_prefix and gt_prefix in sent:
+            return True
+
+    return False
+
+
+def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
+    """
+    Calculate ground truth comparison metrics using weighted scoring.
+
+    Scoring:
+    - 1.0: Exact sentence match (TP)
+    - 0.5: Same theme + page but different sentence (Partial TP)
+    - 0.0: Different theme or not in GT (FP)
+
+    Only findings from GT themes are counted; other themes are suppressed.
+
+    Args:
+        findings_list: List of finding dicts with 'page', 'sentence', 'category' keys
+        gt_keys: Set of GT keys from load_ground_truth()
+        gt_df: Ground truth DataFrame
+        tc_number: Test case number (e.g., "TC01")
+
+    Returns:
+        dict with tp, partial_tp, fp, fn, precision, recall, f1, and detailed_findings list
+    """
+    # Filter GT entries for this TC
+    tc_gt = gt_df[gt_df["TC Id"].str.strip().str.upper() == tc_number.upper()]
+    expected_count = len(tc_gt)
+
+    # Get valid themes for this TC from GT
+    valid_themes = set()
+    for _, row in tc_gt.iterrows():
+        category = str(row.get("Category", "")).strip()
+        if category:
+            valid_themes.add(category.lower())
+
+    # Build theme-based GT lookup: (tc, page, category) -> list of sentences
+    gt_theme_map = {}
+    for _, row in tc_gt.iterrows():
+        page = int(row.get("Page Number", 0)) if pd.notna(row.get("Page Number")) else 0
+        category = str(row.get("Category", "")).strip().lower()
+        sentence = str(row.get("Non compliant", "")).strip()
+        key = (tc_number.upper(), page, category)
+        if key not in gt_theme_map:
+            gt_theme_map[key] = []
+        gt_theme_map[key].append(sentence)
+
+    # Classify findings with weighted scoring
+    tp = 0.0  # Full matches (exact sentence)
+    partial_tp = 0.0  # Partial matches (same theme + page)
+    fp = 0  # False positives (wrong theme or not in GT)
+    suppressed = 0  # Findings from themes not in GT
+
+    detailed_findings = []
+    matched_gt = set()  # Track which GT entries were matched
+
+    for finding in findings_list:
+        page = finding.get("page", 0)
+        try:
+            page = int(page) if pd.notna(page) else 0
+        except (ValueError, TypeError):
+            page = 0
+
+        sentence = str(finding.get("sentence", "")).strip()
+        category = str(finding.get("category", "")).strip().lower()
+
+        # Check if this finding is from a valid GT theme
+        if category not in valid_themes:
+            suppressed += 1
+            detailed_findings.append({
+                **finding,
+                "gt_status": "SUPPRESSED",
+                "score": 0.0,
+                "match_type": "Theme not in GT"
+            })
+            continue
+
+        # Check for exact match first
+        is_exact = is_ground_truth(tc_number, page, sentence, gt_keys)
+
+        if is_exact:
+            tp += 1.0
+            matched_gt.add((tc_number.upper(), page, sentence[:50].lower()))
+            detailed_findings.append({
+                **finding,
+                "gt_status": "TP",
+                "score": 1.0,
+                "match_type": "Exact match"
+            })
+        else:
+            # Check for theme + page match
+            theme_key = (tc_number.upper(), page, category)
+            if theme_key in gt_theme_map:
+                # Found a GT entry with same theme and page
+                partial_tp += 0.5
+                detailed_findings.append({
+                    **finding,
+                    "gt_status": "PARTIAL_TP",
+                    "score": 0.5,
+                    "match_type": f"Theme + page match (P{page})"
+                })
+            else:
+                # Valid theme but wrong page or no GT for this page
+                fp += 1
+                detailed_findings.append({
+                    **finding,
+                    "gt_status": "FP",
+                    "score": 0.0,
+                    "match_type": "Valid theme, wrong page/context"
+                })
+
+    # Calculate false negatives (GT entries not matched)
+    fn = expected_count - tp
+
+    # Weighted metrics
+    weighted_tp = tp + partial_tp
+    total_found = tp + partial_tp + fp
+
+    precision = weighted_tp / total_found if total_found > 0 else 0.0
+    recall = weighted_tp / expected_count if expected_count > 0 else 0.0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return {
+        "tp": int(tp),
+        "partial_tp": partial_tp,
+        "fp": fp,
+        "fn": fn,
+        "suppressed": suppressed,
+        "weighted_tp": weighted_tp,
+        "expected": expected_count,
+        "found": len(findings_list),
+        "relevant_found": int(tp + partial_tp + fp),  # Findings from valid themes
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "detailed_findings": detailed_findings,
+    }
+
+
+def get_missing_gt_findings(gt_df, tc_number, found_findings, gt_keys):
+    """
+    Get list of GT findings that were NOT found by the API (false negatives).
+
+    Args:
+        gt_df: Ground truth DataFrame
+        tc_number: Test case number
+        found_findings: List of findings found by API
+        gt_keys: Set of GT keys
+
+    Returns:
+        List of missing GT findings with details
+    """
+    tc_gt = gt_df[gt_df["TC Id"].str.strip().str.upper() == tc_number.upper()]
+    missing = []
+
+    for _, gt_row in tc_gt.iterrows():
+        page = int(gt_row.get("Page Number", 0)) if pd.notna(gt_row.get("Page Number")) else 0
+        sentence = str(gt_row.get("Non compliant", "")).strip()
+
+        # Check if this GT finding was found by API
+        found = False
+        for finding in found_findings:
+            if is_ground_truth(tc_number, finding.get("page"), finding.get("sentence"), gt_keys):
+                # Check if it matches this specific GT entry
+                if page == finding.get("page") and sentence[:50].lower() in str(finding.get("sentence", "")).lower():
+                    found = True
+                    break
+
+        if not found:
+            missing.append({
+                "page": page,
+                "sentence": sentence,
+                "category": gt_row.get("Category", ""),
+                "sub_bucket": gt_row.get("Sub Bucket", ""),
+                "reasoning": gt_row.get("Reasoning", ""),
+                "rule_citation": gt_row.get("Rule citation", ""),
+            })
+
+    return missing
