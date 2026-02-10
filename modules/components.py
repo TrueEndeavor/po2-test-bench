@@ -262,6 +262,10 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
             st.caption(f"\u2705 **{tc}**: {count} findings \u2014 {top}{gt_suffix}")
         elif r["success"]:
             st.caption(f"\u2705 **{tc}**: No findings")
+            # Debug: Show response preview for successful runs with 0 findings
+            if st.session_state.get("debug_mode"):
+                with st.expander(f"Debug: View API response for {tc}"):
+                    st.json(json.loads(r.get("response", "{}"))[:2000] if r.get("response") else {})
         else:
             error_msg = r.get("response", "Unknown error")
             st.caption(f"\u274c **{tc}**: Failed ({r['status_code']})")
