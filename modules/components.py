@@ -25,25 +25,30 @@ def render_metrics_bar(doc_count, results, gt_keys=None, gt_df=None):
     has_gt = gt_keys is not None and gt_df is not None and not gt_df.empty
 
     if has_gt and run_count > 0:
-        agg_gt = {"tp": 0, "fp": 0, "fn": 0, "expected": 0, "found": 0}
+        agg_gt = {"tp": 0, "fp": 0, "fn": 0, "suppressed": 0, "expected": 0, "found": 0}
 
         for r in results.values():
             if r.get("success") and r.get("gt_metrics"):
                 metrics = r["gt_metrics"]
-                agg_gt["tp"] += metrics.get("tp", 0)
-                agg_gt["fp"] += metrics.get("fp", 0)
+                tp = metrics.get("tp", 0)
+                fp = metrics.get("fp", 0)
+                agg_gt["tp"] += tp
+                agg_gt["fp"] += fp
                 agg_gt["fn"] += metrics.get("fn", 0)
+                agg_gt["suppressed"] += metrics.get("suppressed", 0)
                 agg_gt["expected"] += metrics.get("expected", 0)
-                agg_gt["found"] += metrics.get("relevant_found", 0)
+                # Use relevant_found if available, otherwise calculate as tp + fp
+                agg_gt["found"] += metrics.get("relevant_found", tp + fp)
 
-        # Single row metrics
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        # Single row metrics with suppressed
+        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
         m1.metric("TCs Run", f"{run_count}/{doc_count}")
         m2.metric("GT Expected", agg_gt["expected"])
         m3.metric("API Found", agg_gt["found"])
         m4.metric("Exact Match (TP)", agg_gt["tp"])
         m5.metric("False Positive", agg_gt["fp"])
         m6.metric("False Negative", agg_gt["fn"])
+        m7.metric("Suppressed", agg_gt["suppressed"])
     else:
         # No GT data yet, show basic metrics
         m1, m2, m3, m4 = st.columns(4)

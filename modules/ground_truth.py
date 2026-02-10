@@ -100,9 +100,10 @@ def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
             gt_theme_map[key] = []
         gt_theme_map[key].append(sentence)
 
-    # Simple scoring: TP or FP (no partial matches, no suppression)
+    # Simple scoring: TP, FP, or Suppressed
     tp = 0
     fp = 0
+    suppressed = 0
     detailed_findings = []
 
     for finding in findings_list:
@@ -113,8 +114,20 @@ def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
             page = 0
 
         sentence = str(finding.get("sentence", "")).strip()
+        category = str(finding.get("category", "")).strip().lower()
 
-        # Check for exact match
+        # Check if this finding's category is in GT for this TC
+        if category not in valid_themes:
+            # Suppress findings from categories not in GT
+            suppressed += 1
+            detailed_findings.append({
+                **finding,
+                "gt_status": "Suppressed",
+                "match_type": "Category not in GT"
+            })
+            continue
+
+        # Check for exact match (only for findings in GT categories)
         is_exact = is_ground_truth(tc_number, page, sentence, gt_keys)
 
         if is_exact:
@@ -135,9 +148,10 @@ def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
     # False negatives = GT entries not found by API
     fn = expected_count - tp
 
-    # Simple metrics
+    # Simple metrics (only count TP + FP, exclude suppressed)
     total_found = len(findings_list)
-    precision = tp / total_found if total_found > 0 else 0.0
+    total_relevant = tp + fp  # Only findings in GT categories
+    precision = tp / total_relevant if total_relevant > 0 else 0.0
     recall = tp / expected_count if expected_count > 0 else 0.0
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
@@ -145,8 +159,10 @@ def calculate_gt_metrics(findings_list, gt_keys, gt_df, tc_number):
         "tp": tp,
         "fp": fp,
         "fn": fn,
+        "suppressed": suppressed,
         "expected": expected_count,
         "found": total_found,
+        "relevant_found": total_relevant,  # TP + FP (excluding suppressed)
         "precision": precision,
         "recall": recall,
         "f1": f1,
