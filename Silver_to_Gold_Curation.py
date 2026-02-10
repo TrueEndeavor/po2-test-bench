@@ -181,17 +181,18 @@ def find_pdf_path(filename):
 # ---------------------------------------------------------------------------
 golden_records = load_golden_records()
 
-# Run label filter - only show golden_v* baselines
+# Run label filter - only show golden_v* baselines (oldest first)
 run_labels = sorted(
-    set(r.get("run_label", "") for r in golden_records),
-    reverse=True,
+    set(r.get("run_label", "") for r in golden_records)
 )
 golden_labels = [rl for rl in run_labels if rl.startswith("golden_v")]
+
+st.title("PO2 Golden Dataset Admin")
 
 col_title, col_baseline = st.columns([3, 1])
 
 with col_title:
-    st.markdown("## 🥇 Silver-to-Gold Curation")
+    st.markdown("### 🥇 Silver-to-Gold Curation")
 
 with col_baseline:
     st.write("")  # Spacer for alignment
