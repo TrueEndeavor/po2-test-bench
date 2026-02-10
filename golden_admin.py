@@ -815,7 +815,7 @@ with tab_capture:
     ]
     next_version = max(golden_versions, default=0) + 1
 
-    col_label, col_btn = st.columns([2, 1])
+    col_label, col_mode = st.columns([2, 1])
 
     with col_label:
         new_run_label = st.text_input(
@@ -825,15 +825,29 @@ with tab_capture:
             key="capture_run_label",
         )
 
-    with col_btn:
-        st.write("")  # Spacer
-        st.write("")  # Spacer
-        capture_btn = st.button(
-            "▶ Capture All TCs",
-            type="primary",
-            use_container_width=True,
-            key="capture_golden_btn",
+    with col_mode:
+        resume_mode = st.checkbox(
+            "Resume existing run",
+            value=False,
+            help="Only run TCs that are missing from this run_label (useful if you stopped mid-capture)",
         )
+
+    # Check what's already captured for this run_label
+    existing_tcs = set()
+    if resume_mode:
+        existing_docs = list(golden_coll.find({"run_label": new_run_label}))
+        existing_tcs = set(doc.get("tc_number", "") for doc in existing_docs)
+        if existing_tcs:
+            st.info(f"📋 Found {len(existing_tcs)} TCs already captured for **{new_run_label}**: {', '.join(sorted(existing_tcs, key=tc_sort_key))}")
+        else:
+            st.warning(f"No existing TCs found for **{new_run_label}**. Will run all TCs.")
+
+    capture_btn = st.button(
+        f"▶ {'Resume' if resume_mode else 'Capture'} Baseline",
+        type="primary",
+        use_container_width=True,
+        key="capture_golden_btn",
+    )
 
     if capture_btn:
         # Load test documents
@@ -849,10 +863,24 @@ with tab_capture:
         else:
             items = sorted(test_docs, key=lambda x: tc_sort_key(x["filename"]))
 
+        # Filter out already captured TCs if in resume mode
+        if resume_mode and existing_tcs:
+            items = [
+                item for item in items
+                if short_name(item["filename"] if use_mongo else item.name)[0] not in existing_tcs
+            ]
+
         doc_count = len(items)
 
+        if doc_count == 0:
+            st.success(f"✅ All TCs already captured for **{new_run_label}**! Nothing to do.")
+            st.stop()
+
         st.divider()
-        st.subheader(f"Capturing {new_run_label}...")
+        if resume_mode and existing_tcs:
+            st.subheader(f"Resuming {new_run_label}... ({len(existing_tcs)} already done, {doc_count} remaining)")
+        else:
+            st.subheader(f"Capturing {new_run_label}...")
 
         # Create placeholders for real-time updates
         progress_bar = st.progress(0, text="Starting baseline capture...")
