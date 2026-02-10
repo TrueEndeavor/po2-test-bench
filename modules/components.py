@@ -194,15 +194,17 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
         # Aggregate GT metrics
         if has_gt and r.get("gt_metrics"):
             metrics = r["gt_metrics"]
-            agg_gt["tp"] += metrics.get("tp", 0)
+            tp = metrics.get("tp", 0)
+            fp = metrics.get("fp", 0)
+            agg_gt["tp"] += tp
             agg_gt["partial_tp"] += metrics.get("partial_tp", 0.0)
-            agg_gt["fp"] += metrics.get("fp", 0)
+            agg_gt["fp"] += fp
             agg_gt["fn"] += metrics.get("fn", 0)
             agg_gt["suppressed"] += metrics.get("suppressed", 0)
             agg_gt["weighted_tp"] += metrics.get("weighted_tp", 0.0)
             agg_gt["expected"] += metrics.get("expected", 0)
             agg_gt["found"] += metrics.get("found", 0)
-            agg_gt["relevant_found"] += metrics.get("relevant_found", 0)
+            agg_gt["relevant_found"] += metrics.get("relevant_found", tp + fp)
 
     # Display GT metrics summary
     if has_gt and agg_gt["expected"] > 0:
