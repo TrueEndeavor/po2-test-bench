@@ -109,9 +109,13 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 st.title("Compliance Test Runner")
 
-render_drilldown_panel(results, items, use_mongo, gt_keys, gt_df)
+# Use a placeholder so the dashboard can be refreshed during Run All
+dashboard_placeholder = st.empty()
+with dashboard_placeholder.container():
+    render_drilldown_panel(results, items, use_mongo, gt_keys, gt_df)
 
 st.divider()
 
 render_tc_buttons(items, results, use_mongo, gt_keys, gt_df, run_name,
-                  prompt_label=prompt_label, run_by=run_by)
+                  prompt_label=prompt_label, run_by=run_by,
+                  dashboard_placeholder=dashboard_placeholder)

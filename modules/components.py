@@ -95,7 +95,7 @@ def _process_single_tc(item, use_mongo, gt_keys, gt_df, run_name):
 
 
 def render_tc_buttons(items, results, use_mongo, gt_keys=None, gt_df=None, run_name=None,
-                      prompt_label="", run_by=""):
+                      prompt_label="", run_by="", dashboard_placeholder=None):
     """Left pane: clickable test-case buttons that trigger API submission."""
     st.markdown("#### Test Cases")
 
@@ -162,6 +162,14 @@ def render_tc_buttons(items, results, use_mongo, gt_keys=None, gt_df=None, run_n
                     done_count / total,
                     text=f"Progress: {done_count}/{total} completed",
                 )
+
+                # Refresh dashboard live so user sees results building up
+                if dashboard_placeholder is not None:
+                    with dashboard_placeholder.container():
+                        render_drilldown_panel(
+                            st.session_state["results"], items, use_mongo,
+                            gt_keys, gt_df,
+                        )
 
             status_text.success(f"Done! All {total} test cases completed.")
             st.rerun()
