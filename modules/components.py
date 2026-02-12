@@ -13,6 +13,29 @@ from modules.naming import short_name
 from modules.ground_truth import calculate_gt_metrics, get_missing_gt_findings
 
 
+def _tag_gt_status(findings, result):
+    """Merge GT status from detailed_findings into findings list for display."""
+    gt_metrics = result.get("gt_metrics")
+    if not gt_metrics or not gt_metrics.get("detailed_findings"):
+        return findings
+
+    # Build lookup by (page, sentence_prefix) -> gt_status
+    gt_lookup = {}
+    for df in gt_metrics["detailed_findings"]:
+        sent = str(df.get("sentence", ""))[:50].lower()
+        page = str(df.get("page", ""))
+        gt_lookup[(page, sent)] = df.get("gt_status", "")
+
+    tagged = []
+    for f in findings:
+        f_copy = dict(f)
+        sent = str(f.get("sentence", ""))[:50].lower()
+        page = str(f.get("page", ""))
+        f_copy["gt_status"] = gt_lookup.get((page, sent), "")
+        tagged.append(f_copy)
+    return tagged
+
+
 def _process_single_tc(item, use_mongo, gt_keys, gt_df, run_name):
     """Run a single TC through the API and return the result dict.
 
@@ -272,7 +295,7 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
                     st.rerun()
 
     st.markdown("---")
-    st.markdown("**Per Test Case**")
+    st.markdown("**Per Test Case** *(expand to see findings)*")
     for item in items:
         name = item["filename"] if use_mongo else item.name
         tc, desc = short_name(name)
@@ -286,23 +309,45 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
                 sorted(r["findings"].items(), key=lambda x: -x[1])[:3]
             )
 
-            # Add GT metrics if available
+            # Build label with GT metrics if available
             gt_suffix = ""
             if r.get("gt_metrics"):
                 gt_m = r["gt_metrics"]
                 gt_suffix = f" | GT: {gt_m['tp']}TP/{gt_m['fp']}FP/{gt_m['fn']}FN"
 
-            st.caption(f"\u2705 **{tc}**: {count} findings \u2014 {top}{gt_suffix}")
+            with st.expander(f"\u2705 **{tc}**: {count} findings \u2014 {top}{gt_suffix}"):
+                # Show findings table inline
+                full_resp = r.get("full_response", {})
+                mongo_doc_id = r.get("mongo_doc_id")
+                if full_resp and mongo_doc_id:
+                    for source_key in ["raw_output", "sequential_reasoner"]:
+                        source_data = full_resp.get(source_key, {})
+                        if isinstance(source_data, dict) and source_data:
+                            findings = extract_findings_for_review(
+                                mongo_doc_id, source_data, source_key
+                            )
+                            if findings:
+                                df_tc = pd.DataFrame([
+                                    {
+                                        "Category": f["category"],
+                                        "Sentence": str(f["sentence"])[:100],
+                                        "Page": f["page"],
+                                        "GT": (f.get("gt_status", "")
+                                               if r.get("gt_metrics") and
+                                               f.get("gt_status") else ""),
+                                    }
+                                    for f in _tag_gt_status(findings, r)
+                                ])
+                                st.dataframe(
+                                    df_tc, use_container_width=True,
+                                    hide_index=True,
+                                )
+                                break
         elif r["success"]:
             st.caption(f"\u2705 **{tc}**: No findings")
-            # Debug: Show response preview for successful runs with 0 findings
-            if st.session_state.get("debug_mode"):
-                with st.expander(f"Debug: View API response for {tc}"):
-                    st.json(json.loads(r.get("response", "{}"))[:2000] if r.get("response") else {})
         else:
             error_msg = r.get("response", "Unknown error")
-            st.caption(f"\u274c **{tc}**: Failed ({r['status_code']})")
-            with st.expander(f"View error details for {tc}"):
+            with st.expander(f"\u274c **{tc}**: Failed ({r['status_code']})"):
                 st.error(error_msg)
 
 
