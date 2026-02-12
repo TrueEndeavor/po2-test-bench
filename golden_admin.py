@@ -16,7 +16,7 @@ load_dotenv()
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Silver-to-Gold Curation",
+    page_title="Golden Dataset Admin",
     page_icon="🥇",
     layout="wide",
 )
@@ -196,7 +196,7 @@ st.title("PO2 Golden Dataset Admin")
 col_title, col_baseline = st.columns([3, 1])
 
 with col_title:
-    st.markdown("### 🥇 Silver-to-Gold Curation")
+    st.markdown("### 🥇 Golden Dataset Admin")
 
 with col_baseline:
     st.write("")  # Spacer for alignment
@@ -813,7 +813,7 @@ with tab_details:
 with tab_add:
     st.info(
         "Coming soon — manually add ground truth findings that the API missed. "
-        "This completes the Silver-to-Gold workflow: corrections + additions."
+        "This completes the Golden Dataset workflow: corrections + additions."
     )
     with st.form("add_ground_truth", clear_on_submit=True):
         st.text_input("Sentence", disabled=True)

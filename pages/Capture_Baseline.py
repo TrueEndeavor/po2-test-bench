@@ -122,7 +122,7 @@ if capture_btn:
 
     if doc_count == 0:
         st.success(f"✅ All TCs already captured for **{new_run_label}**! Nothing to do.")
-        st.info("💡 Go to the **Silver-to-Gold Curation** page to review and curate findings.")
+        st.info("💡 Go to the **Golden Dataset Admin** page to review and curate findings.")
         st.stop()
 
     st.divider()
@@ -202,4 +202,4 @@ if capture_btn:
             st.rerun()
 
     with col_next2:
-        st.markdown(f"**Next:** Go to **Silver-to-Gold Curation** page to review **{new_run_label}**")
+        st.markdown(f"**Next:** Go to **Golden Dataset Admin** page to review **{new_run_label}**")

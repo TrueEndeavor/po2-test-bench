@@ -50,7 +50,9 @@ def parse_run_name(run_name):
                 "name": name,
                 "timestamp": timestamp,
                 "display_name": name,
-                "timestamp_str": timestamp.strftime("%b %d, %Y %I:%M:%S %p")
+                "timestamp_str": timestamp.strftime("%b %d, %Y %I:%M:%S %p"),
+                "date_str": timestamp.strftime("%d %b"),
+                "time_str": timestamp.strftime("%H:%M"),
             }
         except ValueError:
             pass
@@ -60,5 +62,7 @@ def parse_run_name(run_name):
         "name": run_name,
         "timestamp": None,
         "display_name": run_name,
-        "timestamp_str": ""
+        "timestamp_str": "",
+        "date_str": "",
+        "time_str": "",
     }

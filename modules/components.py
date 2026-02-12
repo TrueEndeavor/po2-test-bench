@@ -5,136 +5,118 @@ from collections import Counter
 import pandas as pd
 import streamlit as st
 
-from modules.config import THEME_ORDER, REVIEW_FIELDS, CATEGORY_THEMES
-from modules.parsers import cat_to_theme, parse_findings_summary, extract_findings_for_review
-from modules.db import get_results_collection, save_all_changes
+from modules.config import REVIEW_FIELDS
+from modules.parsers import parse_findings_summary, extract_findings_for_review
+from modules.db import get_results_collection, save_all_changes, save_run
 from modules.api import submit_from_mongo, submit_document
 from modules.naming import short_name
 from modules.ground_truth import calculate_gt_metrics, get_missing_gt_findings
 
 
-def render_metrics_bar(doc_count, results, gt_keys=None, gt_df=None):
-    """Top-level consolidated GT metrics bar."""
-    now_str = datetime.now().strftime("%b %d, %Y  %I:%M %p")
+def _process_single_tc(item, use_mongo, gt_keys, gt_df, run_name):
+    """Run a single TC through the API and return the result dict.
 
-    # Count run status
-    run_count = len([r for r in results.values() if r.get("success")])
-    pending = doc_count - run_count
+    This is the shared processing logic used by both individual TC buttons
+    and the Run All batch mode.
+    """
+    name = item["filename"] if use_mongo else item.name
+    tc, _ = short_name(name)
 
-    # Aggregate GT metrics across all runs
-    has_gt = gt_keys is not None and gt_df is not None and not gt_df.empty
-
-    if has_gt and run_count > 0:
-        agg_gt = {"tp": 0, "fp": 0, "fn": 0, "suppressed": 0, "expected": 0, "found": 0}
-
-        for r in results.values():
-            if r.get("success") and r.get("gt_metrics"):
-                metrics = r["gt_metrics"]
-                tp = metrics.get("tp", 0)
-                fp = metrics.get("fp", 0)
-                agg_gt["tp"] += tp
-                agg_gt["fp"] += fp
-                agg_gt["fn"] += metrics.get("fn", 0)
-                agg_gt["suppressed"] += metrics.get("suppressed", 0)
-                agg_gt["expected"] += metrics.get("expected", 0)
-                # Use relevant_found if available, otherwise calculate as tp + fp
-                agg_gt["found"] += metrics.get("relevant_found", tp + fp)
-
-        # Single row metrics with suppressed
-        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
-        m1.metric("TCs Run", f"{run_count}/{doc_count}")
-        m2.metric("GT Expected", agg_gt["expected"])
-        m3.metric("API Found", agg_gt["found"])
-        m4.metric("Exact Match (TP)", agg_gt["tp"])
-        m5.metric("False Positive", agg_gt["fp"])
-        m6.metric("False Negative", agg_gt["fn"])
-        m7.metric("Suppressed", agg_gt["suppressed"])
+    if use_mongo:
+        resp, meta = submit_from_mongo(item)
     else:
-        # No GT data yet, show basic metrics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total TCs", doc_count)
-        m2.metric("Run", run_count)
-        m3.metric("Pending", pending)
-        m4.metric("Ready", "Run TCs to see GT metrics")
+        resp, meta = submit_document(item)
 
-    st.caption(f"NW Testing Team | {now_str}")
+    success = resp.status_code == 200
+    full_response = {}
+    mongo_doc_id = None
+    gt_metrics = None
+
+    if success:
+        full_response = json.loads(resp.text)
+        doc_name = meta["document_metadata"]["document_name"]
+        coll = get_results_collection()
+        mongo_doc = coll.find_one(
+            {"metadata.others.document_metadata.document_name": doc_name},
+            sort=[("created_at", -1)],
+        )
+        if mongo_doc:
+            mongo_doc_id = str(mongo_doc["_id"])
+
+        if gt_keys is not None and gt_df is not None and not gt_df.empty:
+            findings_list = []
+            for source_key in ["raw_output", "sequential_reasoner"]:
+                source_data = full_response.get(source_key, {})
+                if isinstance(source_data, dict) and source_data:
+                    findings = extract_findings_for_review(
+                        mongo_doc_id or "temp", source_data, source_key
+                    )
+                    if findings:
+                        findings_list = findings
+                        break
+
+            if findings_list:
+                gt_metrics = calculate_gt_metrics(findings_list, gt_keys, gt_df, tc)
+
+    return {
+        "status_code": resp.status_code,
+        "success": success,
+        "response": resp.text[:5000],
+        "findings": parse_findings_summary(resp.text) if success else {},
+        "full_response": full_response,
+        "mongo_doc_id": mongo_doc_id,
+        "gt_metrics": gt_metrics,
+        "run_name": run_name or "unknown",
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
-def render_tc_buttons(items, results, use_mongo, gt_keys=None, gt_df=None, run_name=None):
+def render_tc_buttons(items, results, use_mongo, gt_keys=None, gt_df=None, run_name=None,
+                      prompt_label="", run_by=""):
     """Left pane: clickable test-case buttons that trigger API submission."""
     st.markdown("#### Test Cases")
 
-    if st.button("Clear Results", use_container_width=True):
-        st.session_state["results"] = {}
-        st.session_state.pop("drill_level", None)
-        st.session_state.pop("drill_theme", None)
-        st.rerun()
+    # --- Action buttons row ---
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        run_all_clicked = st.button(
+            "▶ Run All", type="primary", use_container_width=True,
+            help="Run all pending test cases sequentially",
+        )
+    with btn_col2:
+        if st.button("Clear Results", use_container_width=True):
+            st.session_state["results"] = {}
+            st.session_state.pop("drill_level", None)
+            st.session_state.pop("drill_category", None)
+            st.rerun()
 
-    st.markdown("")
+    # --- Run All batch mode (runs synchronously on button click) ---
+    if run_all_clicked:
+        pending = [
+            item for item in items
+            if (item["filename"] if use_mongo else item.name) not in results
+        ]
 
-    for item in items:
-        name = item["filename"] if use_mongo else item.name
-        tc, desc = short_name(name)
-        result = results.get(name)
-
-        if result:
-            icon = "\u2705" if result["success"] else "\u274c"
+        if not pending:
+            st.success("All test cases already run!")
         else:
-            icon = "\u23f3"
+            total = len(items)
+            already_done = total - len(pending)
+            progress_bar = st.progress(
+                already_done / total,
+                text=f"Progress: {already_done}/{total} completed",
+            )
+            status_text = st.empty()
 
-        btn_label = f"{icon} {tc} | {desc}"
+            for i, item in enumerate(pending):
+                name = item["filename"] if use_mongo else item.name
+                tc, desc = short_name(name)
+                status_text.info(f"Running **{tc}** — {desc} ({already_done + i + 1}/{total})...")
 
-        if st.button(btn_label, key=f"run_{name}", use_container_width=True):
-            with st.spinner(f"Running {tc}..."):
                 try:
-                    if use_mongo:
-                        resp, meta = submit_from_mongo(item)
-                    else:
-                        resp, meta = submit_document(item)
-
-                    success = resp.status_code == 200
-                    full_response = {}
-                    mongo_doc_id = None
-                    gt_metrics = None
-
-                    if success:
-                        full_response = json.loads(resp.text)
-                        # Find the doc in PO2_testing for write-back
-                        doc_name = meta["document_metadata"]["document_name"]
-                        coll = get_results_collection()
-                        mongo_doc = coll.find_one(
-                            {"metadata.others.document_metadata.document_name": doc_name},
-                            sort=[("created_at", -1)],
-                        )
-                        if mongo_doc:
-                            mongo_doc_id = str(mongo_doc["_id"])
-
-                        # Calculate GT metrics if GT data is available
-                        if gt_keys is not None and gt_df is not None and not gt_df.empty:
-                            # Extract findings from the response
-                            findings_list = []
-                            for source_key in ["raw_output", "sequential_reasoner"]:
-                                source_data = full_response.get(source_key, {})
-                                if isinstance(source_data, dict) and source_data:
-                                    findings = extract_findings_for_review(mongo_doc_id or "temp", source_data, source_key)
-                                    if findings:
-                                        findings_list = findings
-                                        break
-
-                            if findings_list:
-                                gt_metrics = calculate_gt_metrics(findings_list, gt_keys, gt_df, tc)
-
-                    st.session_state["results"][name] = {
-                        "status_code": resp.status_code,
-                        "success": success,
-                        "response": resp.text[:5000],
-                        "findings": parse_findings_summary(resp.text) if success else {},
-                        "full_response": full_response,
-                        "mongo_doc_id": mongo_doc_id,
-                        "gt_metrics": gt_metrics,
-                        "run_name": run_name or "unknown",
-                        "timestamp": datetime.now().isoformat(),
-                    }
+                    with st.spinner(f"Waiting for API response for {tc}..."):
+                        result = _process_single_tc(item, use_mongo, gt_keys, gt_df, run_name)
+                    st.session_state["results"][name] = result
                 except Exception as e:
                     st.session_state["results"][name] = {
                         "status_code": 0,
@@ -147,7 +129,55 @@ def render_tc_buttons(items, results, use_mongo, gt_keys=None, gt_df=None, run_n
                         "run_name": run_name or "unknown",
                         "timestamp": datetime.now().isoformat(),
                     }
+
+                # Persist after each TC
+                save_run(run_name or "unknown", st.session_state["results"],
+                        prompt_label, run_by)
+
+                done_count = already_done + i + 1
+                progress_bar.progress(
+                    done_count / total,
+                    text=f"Progress: {done_count}/{total} completed",
+                )
+
+            status_text.success(f"Done! All {total} test cases completed.")
             st.rerun()
+
+    st.markdown("")
+
+    # --- Individual TC buttons (compact grid) ---
+    cols = st.columns(6)
+    for idx, item in enumerate(items):
+        name = item["filename"] if use_mongo else item.name
+        tc, desc = short_name(name)
+        result = results.get(name)
+
+        if result:
+            icon = "\u2705" if result["success"] else "\u274c"
+        else:
+            icon = "\u23f3"
+
+        with cols[idx % 6]:
+            if st.button(f"{icon} {tc}", key=f"run_{name}", use_container_width=True):
+                with st.spinner(f"Running {tc}..."):
+                    try:
+                        result = _process_single_tc(item, use_mongo, gt_keys, gt_df, run_name)
+                        st.session_state["results"][name] = result
+                    except Exception as e:
+                        st.session_state["results"][name] = {
+                            "status_code": 0,
+                            "success": False,
+                            "response": str(e),
+                            "findings": {},
+                            "full_response": {},
+                            "mongo_doc_id": None,
+                            "gt_metrics": None,
+                            "run_name": run_name or "unknown",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    save_run(run_name or "unknown", st.session_state["results"],
+                             prompt_label, run_by)
+                st.rerun()
 
 
 def render_drilldown_panel(results, items, use_mongo, gt_keys=None, gt_df=None):
@@ -159,8 +189,8 @@ def render_drilldown_panel(results, items, use_mongo, gt_keys=None, gt_df=None):
 
     drill_level = st.session_state.get("drill_level", "summary")
 
-    if drill_level == "theme":
-        _render_theme_level(results, items, use_mongo)
+    if drill_level == "category":
+        _render_category_level(results, items, use_mongo)
     elif drill_level == "gt_comparison":
         _render_gt_comparison(results, items, use_mongo, gt_keys, gt_df)
     else:
@@ -173,7 +203,7 @@ def render_drilldown_panel(results, items, use_mongo, gt_keys=None, gt_df=None):
 def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
     st.markdown("#### Results Dashboard")
 
-    all_themes = Counter()
+    all_categories = Counter()
     total_findings = 0
     has_gt = gt_keys is not None and gt_df is not None and not gt_df.empty
 
@@ -187,8 +217,7 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
     for r in results.values():
         if r.get("success") and r.get("findings"):
             for cat, count in r["findings"].items():
-                theme = cat_to_theme(cat)
-                all_themes[theme] += count
+                all_categories[cat] += count
                 total_findings += count
 
         # Aggregate GT metrics
@@ -226,20 +255,20 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
         st.divider()
 
     if total_findings > 0:
-        st.markdown("### Findings by Theme")
+        st.markdown("### Findings by Category")
         st.metric("Total Findings", total_findings)
 
-        st.markdown("**By Theme** *(click View to drill down)*")
-        sorted_themes = sorted(all_themes.items(), key=lambda x: THEME_ORDER.get(x[0], 99))
-        for theme, count in sorted_themes:
+        st.markdown("**By Category** *(click View to drill down)*")
+        sorted_cats = sorted(all_categories.items(), key=lambda x: (-x[1], x[0]))
+        for cat, count in sorted_cats:
             pct = count / total_findings * 100
             col_bar, col_btn = st.columns([5, 1])
             with col_bar:
-                st.progress(pct / 100, text=f"{theme}: **{count}** ({pct:.0f}%)")
+                st.progress(pct / 100, text=f"{cat}: **{count}** ({pct:.0f}%)")
             with col_btn:
-                if st.button("View", key=f"drill_{theme}"):
-                    st.session_state["drill_level"] = "theme"
-                    st.session_state["drill_theme"] = theme
+                if st.button("View", key=f"drill_{cat}"):
+                    st.session_state["drill_level"] = "category"
+                    st.session_state["drill_category"] = cat
                     st.rerun()
 
     st.markdown("---")
@@ -252,12 +281,9 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
             continue
         if r["success"] and r["findings"]:
             count = sum(r["findings"].values())
-            tc_themes = Counter()
-            for cat, n in r["findings"].items():
-                tc_themes[cat_to_theme(cat)] += n
             top = ", ".join(
-                f"{t}({n})" for t, n in
-                sorted(tc_themes.items(), key=lambda x: THEME_ORDER.get(x[0], 99))[:3]
+                f"{c}({n})" for c, n in
+                sorted(r["findings"].items(), key=lambda x: -x[1])[:3]
             )
 
             # Add GT metrics if available
@@ -281,10 +307,10 @@ def _render_summary_level(results, items, use_mongo, gt_keys=None, gt_df=None):
 
 
 # ---------------------------------------------------------------------------
-# Level 2: Theme drill-down with editable accept/reject
+# Level 2: Category drill-down with editable accept/reject
 # ---------------------------------------------------------------------------
-def _render_theme_level(results, items, use_mongo):
-    theme = st.session_state.get("drill_theme", "")
+def _render_category_level(results, items, use_mongo):
+    category = st.session_state.get("drill_category", "")
 
     col_back, col_title = st.columns([1, 5])
     with col_back:
@@ -292,9 +318,9 @@ def _render_theme_level(results, items, use_mongo):
             st.session_state["drill_level"] = "summary"
             st.rerun()
     with col_title:
-        st.subheader(theme)
+        st.subheader(category)
 
-    # Collect all findings matching this theme across all TCs
+    # Collect all findings matching this category across all TCs
     all_rows = []
     for item in items:
         name = item["filename"] if use_mongo else item.name
@@ -316,13 +342,13 @@ def _render_theme_level(results, items, use_mongo):
                 findings = extract_findings_for_review(mongo_doc_id, source_data, source_key)
                 if findings:
                     for f in findings:
-                        if cat_to_theme(f["category"]) == theme:
+                        if f["category"] == category:
                             f["test_case"] = tc_label
                             all_rows.append(f)
                     break
 
     if not all_rows:
-        st.info("No findings for this theme.")
+        st.info("No findings for this category.")
         return
 
     df = pd.DataFrame(all_rows)
@@ -335,7 +361,7 @@ def _render_theme_level(results, items, use_mongo):
         "accept", "accept_with_changes", "reject", "reject_reason",
     ]
 
-    editor_key = f"editor_{theme}"
+    editor_key = f"editor_{category}"
 
     edited_df = st.data_editor(
         df[visible_cols],

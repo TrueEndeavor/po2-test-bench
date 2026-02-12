@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 st.set_page_config(
-    page_title="PO2 Test Bench",
+    page_title="PO2 Compliance Test Runner",
     page_icon="\U0001f9ea",
     layout="wide",
 )
@@ -14,11 +14,10 @@ st.set_page_config(
 from modules.db import get_test_documents_collection
 from modules.naming import tc_sort_key, short_name
 from modules.config import TEST_DOCS_DIR
-from modules.api import submit_from_mongo, submit_document
-from modules.parsers import parse_findings_summary, extract_findings_for_review
-from modules.components import render_metrics_bar, render_tc_buttons, render_drilldown_panel
-from modules.ground_truth import load_ground_truth, is_ground_truth, calculate_gt_metrics, get_missing_gt_findings
+from modules.components import render_tc_buttons, render_drilldown_panel
+from modules.ground_truth import load_ground_truth
 from modules.run_names import generate_run_name, parse_run_name
+from modules.db import save_run
 
 
 # ---------------------------------------------------------------------------
@@ -65,43 +64,54 @@ run_name = st.session_state["run_name"]
 run_info = parse_run_name(run_name)
 
 # ---------------------------------------------------------------------------
-# Sidebar: Run Info & Ground Truth controls
+# Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.header("Current Run")
-    st.subheader(f"🎯 {run_info['display_name']}")
-    st.caption(f"Started: {run_info['timestamp_str']}")
-    st.caption(f"ID: `{run_name}`")
+    st.markdown(f"### \U0001f3af {run_info['display_name']}")
+    st.caption(run_info["timestamp_str"])
 
-    if st.button("🔄 Start New Run", use_container_width=True):
-        st.session_state["run_name"] = generate_run_name()
-        st.session_state["results"] = {}
-        st.session_state.pop("drill_level", None)
-        st.session_state.pop("drill_theme", None)
-        st.rerun()
+    prompt_label = st.text_input(
+        "Prompt Version", placeholder="e.g. v1.2.2",
+        key="prompt_label",
+    )
+    run_by = st.text_input(
+        "Run By", placeholder="e.g. Latha",
+        key="run_by",
+    )
 
-    st.divider()
-    st.header("Ground Truth")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Save", use_container_width=True):
+            if results:
+                save_run(run_name, results, prompt_label, run_by)
+                st.success("Saved!")
+            else:
+                st.warning("No results yet.")
+    with c2:
+        if st.button("New Run", use_container_width=True):
+            if results:
+                save_run(run_name, results, prompt_label, run_by)
+            st.session_state["run_name"] = generate_run_name()
+            st.session_state["results"] = {}
+            st.session_state.pop("drill_level", None)
+            st.session_state.pop("drill_theme", None)
+            st.rerun()
 
     if not gt_df.empty:
-        total_gt = len(gt_df)
-        unique_tcs = gt_df["TC Id"].nunique()
-        st.metric("GT Findings", total_gt)
-        st.caption(f"Across {unique_tcs} test cases")
+        st.divider()
+        st.caption(f"**GT:** {len(gt_df)} findings / {gt_df['TC Id'].nunique()} TCs")
     else:
+        st.divider()
         st.warning("No ground truth CSV loaded")
 
 # ---------------------------------------------------------------------------
-# Main: TC runner + dashboard
+# Main
 # ---------------------------------------------------------------------------
-st.title("PO2 Test Bench")
-render_metrics_bar(doc_count, results, gt_keys, gt_df)
+st.title("Compliance Test Runner")
+
+render_drilldown_panel(results, items, use_mongo, gt_keys, gt_df)
+
 st.divider()
 
-col_left, col_right = st.columns([1, 3])
-
-with col_left:
-    render_tc_buttons(items, results, use_mongo, gt_keys, gt_df, run_name)
-
-with col_right:
-    render_drilldown_panel(results, items, use_mongo, gt_keys, gt_df)
+render_tc_buttons(items, results, use_mongo, gt_keys, gt_df, run_name,
+                  prompt_label=prompt_label, run_by=run_by)

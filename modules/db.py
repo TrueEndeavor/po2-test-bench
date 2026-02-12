@@ -44,6 +44,75 @@ def get_runs_collection():
     return get_db()["test_runs"]
 
 
+def save_run(run_name, results, prompt_label="", run_by=""):
+    """Aggregate session results and upsert into test_runs collection."""
+    from modules.naming import short_name
+
+    agg = {"tp": 0, "fp": 0, "fn": 0, "suppressed": 0,
+           "expected": 0, "found": 0, "relevant_found": 0}
+    per_tc = {}
+    tc_count = 0
+
+    for name, r in results.items():
+        if not r.get("success"):
+            continue
+        tc_count += 1
+        gt = r.get("gt_metrics")
+        if not gt:
+            continue
+
+        tc_label, _ = short_name(name)
+        tp = gt.get("tp", 0)
+        fp = gt.get("fp", 0)
+        fn = gt.get("fn", 0)
+        expected = gt.get("expected", 0)
+        found = gt.get("found", 0)
+        relevant_found = gt.get("relevant_found", tp + fp)
+        suppressed = gt.get("suppressed", 0)
+
+        agg["tp"] += tp
+        agg["fp"] += fp
+        agg["fn"] += fn
+        agg["expected"] += expected
+        agg["found"] += found
+        agg["relevant_found"] += relevant_found
+        agg["suppressed"] += suppressed
+
+        per_tc[tc_label] = {
+            "expected": expected,
+            "found": found,
+            "relevant_found": relevant_found,
+            "tp": tp, "fp": fp, "fn": fn,
+        }
+
+    precision = agg["tp"] / agg["relevant_found"] if agg["relevant_found"] else 0
+    recall = agg["tp"] / agg["expected"] if agg["expected"] else 0
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0
+
+    agg["precision"] = round(precision, 4)
+    agg["recall"] = round(recall, 4)
+    agg["f1"] = round(f1, 4)
+
+    doc = {
+        "run_name": run_name,
+        "timestamp": datetime.utcnow(),
+        "test_cases_run": tc_count,
+        "metrics": agg,
+        "per_tc_metrics": per_tc,
+    }
+    if prompt_label:
+        doc["prompt_label"] = prompt_label
+    if run_by:
+        doc["run_by"] = run_by
+
+    coll = get_runs_collection()
+    coll.update_one(
+        {"run_name": run_name},
+        {"$set": doc},
+        upsert=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # simple_viewer.py write-back (PO2_testing collection)
 # ---------------------------------------------------------------------------
@@ -132,6 +201,7 @@ def soft_delete_finding(doc_id, source, art_key, section_idx,
                         category="", sub_bucket="", sentence=""):
     """Record a deletion in golden_deletions. Source doc is NEVER modified."""
     coll = get_golden_deletions_collection()
+    section_idx = int(section_idx)
     coll.update_one(
         {
             "doc_id": doc_id,
