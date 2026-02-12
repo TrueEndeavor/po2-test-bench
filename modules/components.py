@@ -13,6 +13,59 @@ from modules.naming import short_name
 from modules.ground_truth import calculate_gt_metrics, get_missing_gt_findings
 
 
+def _render_live_summary(results, items, use_mongo, gt_keys, gt_df, done, total):
+    """Non-interactive live summary shown during Run All. No buttons/widgets."""
+    st.markdown("#### Results Dashboard")
+
+    has_gt = gt_keys is not None and gt_df is not None and not gt_df.empty
+    agg_tp = agg_fp = agg_fn = agg_expected = agg_found = 0
+    total_findings = 0
+
+    tc_lines = []
+    for item in items:
+        name = item["filename"] if use_mongo else item.name
+        tc, desc = short_name(name)
+        r = results.get(name)
+        if not r:
+            continue
+        if r.get("success") and r.get("findings"):
+            count = sum(r["findings"].values())
+            total_findings += count
+            gt_m = r.get("gt_metrics")
+            if gt_m:
+                agg_tp += gt_m.get("tp", 0)
+                agg_fp += gt_m.get("fp", 0)
+                agg_fn += gt_m.get("fn", 0)
+                agg_expected += gt_m.get("expected", 0)
+                agg_found += gt_m.get("relevant_found", 0)
+                tc_lines.append(
+                    f"| {tc} | {count} | {gt_m['tp']} | {gt_m['fp']} | {gt_m['fn']} |"
+                )
+            else:
+                tc_lines.append(f"| {tc} | {count} | - | - | - |")
+        elif r.get("success"):
+            tc_lines.append(f"| {tc} | 0 | - | - | - |")
+        else:
+            tc_lines.append(f"| {tc} | FAIL | - | - | - |")
+
+    # GT metrics row
+    if has_gt and agg_expected > 0:
+        precision = agg_tp / agg_found if agg_found else 0
+        recall = agg_tp / agg_expected if agg_expected else 0
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("GT Expected", agg_expected)
+        col2.metric("TP", agg_tp)
+        col3.metric("FP", agg_fp)
+        col4.metric("FN", agg_fn)
+        col5.metric("Precision", f"{precision:.0%}")
+
+    # Per-TC table (plain markdown — no interactive widgets)
+    if tc_lines:
+        table = "| TC | Findings | TP | FP | FN |\n|---|---|---|---|---|\n"
+        table += "\n".join(tc_lines)
+        st.markdown(table)
+
+
 def _tag_gt_status(findings, result):
     """Merge GT status from detailed_findings into findings list for display."""
     gt_metrics = result.get("gt_metrics")
@@ -163,12 +216,12 @@ def render_tc_buttons(items, results, use_mongo, gt_keys=None, gt_df=None, run_n
                     text=f"Progress: {done_count}/{total} completed",
                 )
 
-                # Refresh dashboard live so user sees results building up
+                # Refresh dashboard with non-interactive summary (no buttons)
                 if dashboard_placeholder is not None:
                     with dashboard_placeholder.container():
-                        render_drilldown_panel(
+                        _render_live_summary(
                             st.session_state["results"], items, use_mongo,
-                            gt_keys, gt_df,
+                            gt_keys, gt_df, done_count, total,
                         )
 
             status_text.success(f"Done! All {total} test cases completed.")
