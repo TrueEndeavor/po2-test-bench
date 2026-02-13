@@ -4,6 +4,7 @@ Runs Dashboard - View all test runs and their confusion matrices
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from bson import ObjectId
 from modules.db import get_runs_collection
 from modules.run_names import parse_run_name
 
@@ -59,6 +60,44 @@ df.index = df.index + 1  # 1-based index
 
 st.table(df)
 
+# ---------------------------------------------------------------------------
+# Delete Runs
+# ---------------------------------------------------------------------------
+with st.expander("Delete Runs"):
+    run_options = {
+        f"{parse_run_name(r.get('run_name', 'Unknown'))['display_name']}  —  {r.get('test_cases_run', 0)} TCs, "
+        f"F1: {r.get('metrics', {}).get('f1', 0):.1%}": str(r["_id"])
+        for r in runs
+    }
+    selected = st.multiselect(
+        "Select runs to delete",
+        options=list(run_options.keys()),
+        placeholder="Choose one or more runs...",
+    )
+    if selected:
+        if "confirm_delete_runs" not in st.session_state:
+            st.session_state.confirm_delete_runs = False
+
+        if not st.session_state.confirm_delete_runs:
+            if st.button(f"Delete {len(selected)} run(s)", type="secondary"):
+                st.session_state.confirm_delete_runs = True
+                st.rerun()
+        else:
+            st.warning(f"Are you sure you want to delete **{len(selected)} run(s)**? This cannot be undone.")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("Yes, Delete", type="primary"):
+                    coll = get_runs_collection()
+                    for label in selected:
+                        coll.delete_one({"_id": ObjectId(run_options[label])})
+                    st.session_state.confirm_delete_runs = False
+                    st.cache_data.clear()
+                    st.rerun()
+            with col_no:
+                if st.button("Cancel"):
+                    st.session_state.confirm_delete_runs = False
+                    st.rerun()
+
 st.divider()
 
 # ---------------------------------------------------------------------------
@@ -72,14 +111,15 @@ if len(runs) > 0:
 
     for idx, (tab, run) in enumerate(zip(tabs, runs[:10])):
         with tab:
+          try:
             run_info = parse_run_name(run.get("run_name", "Unknown"))
             metrics = run.get("metrics", {})
-            tp = metrics.get("tp", 0)
-            fp = metrics.get("fp", 0)
-            fn = metrics.get("fn", 0)
-            precision = metrics.get("precision", 0)
-            recall = metrics.get("recall", 0)
-            f1 = metrics.get("f1", 0)
+            tp = metrics.get("tp", 0) or 0
+            fp = metrics.get("fp", 0) or 0
+            fn = metrics.get("fn", 0) or 0
+            precision = metrics.get("precision", 0) or 0
+            recall = metrics.get("recall", 0) or 0
+            f1 = metrics.get("f1", 0) or 0
 
             # --- Colored confusion summary ---
             st.markdown(
@@ -114,25 +154,91 @@ if len(runs) > 0:
                 unsafe_allow_html=True,
             )
 
-            # --- Per-TC breakdown ---
+            # --- Per-theme breakdown ---
+            per_theme = run.get("per_theme_metrics", {})
+            if per_theme:
+                st.markdown("#### By Theme")
+                theme_rows = []
+                for theme in sorted(per_theme.keys()):
+                    t = per_theme[theme]
+                    t_found = (t.get("tp", 0) or 0) + (t.get("fp", 0) or 0)
+                    theme_rows.append({
+                        "Theme": theme,
+                        "GT Expected": t.get("expected", 0) or 0,
+                        "API Found": t_found,
+                        "TP": t.get("tp", 0) or 0,
+                        "FP": t.get("fp", 0) or 0,
+                        "FN": t.get("fn", 0) or 0,
+                        "Precision": f"{(t.get('precision', 0) or 0):.1%}",
+                        "Recall": f"{(t.get('recall', 0) or 0):.1%}",
+                        "F1": f"{(t.get('f1', 0) or 0):.1%}",
+                    })
+                st.dataframe(
+                    pd.DataFrame(theme_rows),
+                    use_container_width=True, hide_index=True,
+                )
+
+            # --- Per-TC breakdown with expandable findings ---
             if run.get("per_tc_metrics"):
                 st.markdown("#### Per Test Case")
 
-                tc_rows = []
-                for tc_name, tc_metrics in run["per_tc_metrics"].items():
-                    tc_rows.append({
-                        "Test Case": tc_name,
-                        "GT Expected": tc_metrics.get("expected", 0),
-                        "API Found": tc_metrics.get("relevant_found", 0),
-                        "TP": tc_metrics.get("tp", 0),
-                        "FP": tc_metrics.get("fp", 0),
-                        "FN": tc_metrics.get("fn", 0),
-                    })
+                for tc_name in sorted(run["per_tc_metrics"].keys()):
+                    tc_m = run["per_tc_metrics"][tc_name]
+                    tc_tp = tc_m.get("tp", 0) or 0
+                    tc_fp = tc_m.get("fp", 0) or 0
+                    tc_fn = tc_m.get("fn", 0) or 0
+                    tc_found = tc_m.get("relevant_found", tc_tp + tc_fp) or 0
+                    tc_unscored = tc_m.get("unscored", 0) or 0
+                    label = f"{tc_name} — Expected: {tc_m.get('expected', 0) or 0} | Found: {tc_found} | TP: {tc_tp} | FP: {tc_fp} | FN: {tc_fn}"
+                    if tc_unscored:
+                        label += f" | Unscored: {tc_unscored}"
 
-                if tc_rows:
-                    tc_df = pd.DataFrame(tc_rows)
-                    tc_df.index = tc_df.index + 1
-                    st.table(tc_df)
+                    with st.expander(label, expanded=False):
+                        # Per-theme for this TC
+                        tc_themes = tc_m.get("per_theme", {})
+                        if tc_themes:
+                            t_rows = []
+                            for theme in sorted(tc_themes.keys()):
+                                tm = tc_themes[theme]
+                                t_rows.append({
+                                    "Theme": theme,
+                                    "Expected": tm.get("expected", 0) or 0,
+                                    "Found": tm.get("found", 0) or 0,
+                                    "TP": tm.get("tp", 0) or 0,
+                                    "FP": tm.get("fp", 0) or 0,
+                                    "FN": tm.get("fn", 0) or 0,
+                                })
+                            st.dataframe(
+                                pd.DataFrame(t_rows),
+                                use_container_width=True, hide_index=True,
+                            )
+
+                        # Detailed findings
+                        findings = tc_m.get("findings", [])
+                        if findings:
+                            st.markdown("**Findings**")
+                            st.dataframe(
+                                pd.DataFrame(findings),
+                                use_container_width=True, hide_index=True,
+                                column_config={
+                                    "gt_status": st.column_config.TextColumn("GT", width="small"),
+                                    "theme": st.column_config.TextColumn("Theme", width="small"),
+                                    "page": st.column_config.TextColumn("Page", width="small"),
+                                    "sentence": st.column_config.TextColumn("Sentence", width="large"),
+                                    "category": st.column_config.TextColumn("Category", width="medium"),
+                                },
+                            )
+                        elif tc_found == 0:
+                            st.caption("No findings for this test case.")
+
+                        # Fallback for old runs without detailed data
+                        if not tc_themes and not findings and tc_found > 0:
+                            st.caption("Detailed per-theme and findings data not available for this run. Re-run the test case to populate.")
+                            st.markdown(f"**Expected:** {tc_m.get('expected', 0)} &nbsp; **Found:** {tc_found} &nbsp; **TP:** {tc_tp} &nbsp; **FP:** {tc_fp} &nbsp; **FN:** {tc_fn}")
+
+          except Exception as e:
+            st.error(f"Error rendering run: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Run Comparison
