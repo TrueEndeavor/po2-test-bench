@@ -17,16 +17,37 @@ CUTE_NAMES = [
 ]
 
 
+def _used_names():
+    """Get names already used in existing runs."""
+    try:
+        from modules.db import get_runs_collection
+        coll = get_runs_collection()
+        return {doc["run_name"].split("-")[0] for doc in coll.find({}, {"run_name": 1})}
+    except Exception:
+        return set()
+
+
 def generate_run_name():
     """
-    Generate a cute random run name with timestamp.
+    Generate a unique cute run name with timestamp.
 
-    Format: cutename-YYYY-MM-DD-HH-MM-SS
-    Example: Bubbles-2026-02-10-13-45-23
+    Avoids names already used in existing runs. If all single names are
+    taken, combines two names (e.g. HappyMocha).
     """
-    cute_name = random.choice(CUTE_NAMES)
-    timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    used = _used_names()
+    available = [n for n in CUTE_NAMES if n not in used]
 
+    if available:
+        cute_name = random.choice(available)
+    else:
+        # All single names used — combine two for a fresh name
+        while True:
+            combo = random.choice(CUTE_NAMES) + random.choice(CUTE_NAMES)
+            if combo not in used:
+                cute_name = combo
+                break
+
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     return f"{cute_name}-{timestamp}"
 
 
