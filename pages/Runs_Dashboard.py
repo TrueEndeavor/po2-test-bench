@@ -247,39 +247,67 @@ st.divider()
 st.markdown("### Run Comparison")
 
 if len(runs) >= 2:
-    run_names = [parse_run_name(r.get("run_name", "Unknown"))["display_name"] for r in runs]
+    # Build dropdown labels with prompt + date context
+    def _run_label(r):
+        info = parse_run_name(r.get("run_name", "Unknown"))
+        prompt = r.get("prompt_label", "")
+        suffix = f"  [{prompt}]" if prompt else ""
+        return f"{info['display_name']}  ({info['date_str']}){suffix}"
+
+    run_labels = [_run_label(r) for r in runs]
 
     col1, col2 = st.columns(2)
     with col1:
-        run1_name = st.selectbox("Select Run 1", run_names, key="run1")
+        idx1 = st.selectbox("Current Run", range(len(run_labels)),
+                            format_func=lambda i: run_labels[i], key="run1")
     with col2:
-        run2_name = st.selectbox("Select Run 2", run_names[1:] if len(run_names) > 1 else run_names, key="run2")
+        idx2 = st.selectbox("Baseline Run", range(len(run_labels)),
+                            format_func=lambda i: run_labels[i], key="run2",
+                            index=min(1, len(run_labels) - 1))
 
-    run1 = next((r for r in runs if parse_run_name(r.get("run_name", ""))["display_name"] == run1_name), None)
-    run2 = next((r for r in runs if parse_run_name(r.get("run_name", ""))["display_name"] == run2_name), None)
+    run1 = runs[idx1]
+    run2 = runs[idx2]
+    m1 = run1.get("metrics", {})
+    m2 = run2.get("metrics", {})
 
-    if run1 and run2:
-        m1 = run1.get("metrics", {})
-        m2 = run2.get("metrics", {})
+    # Side-by-side comparison table
+    def _fmt_pct(v): return f"{v:.1%}" if v else "-"
+    def _delta_arrow(curr, base, higher_is_better=True):
+        diff = (curr or 0) - (base or 0)
+        if diff == 0:
+            return "—"
+        arrow = "+" if diff > 0 else ""
+        is_pct = isinstance(curr, float) and curr <= 1.0
+        val = f"{arrow}{diff:.1%}" if is_pct else f"{arrow}{diff}"
+        good = (diff > 0) == higher_is_better
+        color = "green" if good else "red"
+        return f":{color}[{val}]"
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("TP", m1.get("tp", 0), delta=m1.get("tp", 0) - m2.get("tp", 0))
-        col2.metric("FP", m1.get("fp", 0), delta=m1.get("fp", 0) - m2.get("fp", 0), delta_color="inverse")
-        col3.metric("FN", m1.get("fn", 0), delta=m1.get("fn", 0) - m2.get("fn", 0), delta_color="inverse")
+    rows_cmp = []
+    for label, key, higher_better in [
+        ("TP", "tp", True), ("FP", "fp", False), ("FN", "fn", False),
+        ("Precision", "precision", True), ("Recall", "recall", True), ("F1 Score", "f1", True),
+    ]:
+        v1 = m1.get(key, 0) or 0
+        v2 = m2.get(key, 0) or 0
+        is_pct = key in ("precision", "recall", "f1")
+        rows_cmp.append({
+            "Metric": label,
+            "Current": _fmt_pct(v1) if is_pct else v1,
+            "Baseline": _fmt_pct(v2) if is_pct else v2,
+        })
 
-        col4, col5, col6 = st.columns(3)
+    st.table(pd.DataFrame(rows_cmp).set_index("Metric"))
 
-        p1 = m1.get("precision", 0)
-        p2 = m2.get("precision", 0)
-        col4.metric("Precision", f"{p1:.1%}", delta=f"{(p1-p2):.1%}")
-
-        r1 = m1.get("recall", 0)
-        r2 = m2.get("recall", 0)
-        col5.metric("Recall", f"{r1:.1%}", delta=f"{(r1-r2):.1%}")
-
-        f1_1 = m1.get("f1", 0)
-        f1_2 = m2.get("f1", 0)
-        col6.metric("F1 Score", f"{f1_1:.1%}", delta=f"{(f1_1-f1_2):.1%}")
+    # Winner summary
+    f1_curr = m1.get("f1", 0) or 0
+    f1_base = m2.get("f1", 0) or 0
+    if f1_curr > f1_base:
+        st.success(f"Current run wins by F1: {f1_curr:.1%} vs {f1_base:.1%}  (+{f1_curr - f1_base:.1%})")
+    elif f1_curr < f1_base:
+        st.error(f"Baseline wins by F1: {f1_base:.1%} vs {f1_curr:.1%}  ({f1_curr - f1_base:.1%})")
+    else:
+        st.info(f"Tied on F1: {f1_curr:.1%}")
 else:
     st.info("Run more test cases to enable comparison!")
 
