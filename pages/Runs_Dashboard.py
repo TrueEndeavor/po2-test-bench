@@ -270,7 +270,16 @@ if len(runs) >= 2:
     m1 = run1.get("metrics", {})
     m2 = run2.get("metrics", {})
 
-    st.caption("Green = improved vs baseline, Red = worse vs baseline")
+    # Winner hint + legend
+    f1_curr = (m1.get("f1", 0) or 0)
+    f1_base = (m2.get("f1", 0) or 0)
+    if f1_curr > f1_base:
+        verdict = f"Current wins (F1 {f1_curr:.1%} vs {f1_base:.1%})"
+    elif f1_curr < f1_base:
+        verdict = f"Baseline wins (F1 {f1_base:.1%} vs {f1_curr:.1%})"
+    else:
+        verdict = f"Tied (F1 {f1_curr:.1%})"
+    st.caption(f"{verdict}  ·  Green = improved vs baseline, Red = worse")
 
     col1, col2, col3 = st.columns(3)
     col1.metric("TP (higher is better)", m1.get("tp", 0),
@@ -299,13 +308,6 @@ if len(runs) >= 2:
     col6.metric("F1 Score", f"{f1_1:.1%}",
                 delta=f"{(f1_1-f1_2):+.1%} vs baseline")
 
-    # Winner summary
-    if f1_1 > f1_2:
-        st.success(f"Current run wins — F1: {f1_1:.1%} vs baseline {f1_2:.1%}")
-    elif f1_1 < f1_2:
-        st.error(f"Baseline wins — F1: {f1_2:.1%} vs current {f1_1:.1%}")
-    else:
-        st.info(f"Tied on F1: {f1_1:.1%}")
 else:
     st.info("Run more test cases to enable comparison!")
 
