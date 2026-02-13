@@ -258,12 +258,12 @@ if len(runs) >= 2:
 
     col1, col2 = st.columns(2)
     with col1:
-        idx1 = st.selectbox("Current Run", range(len(run_labels)),
-                            format_func=lambda i: run_labels[i], key="run1")
-    with col2:
         idx2 = st.selectbox("Baseline Run", range(len(run_labels)),
                             format_func=lambda i: run_labels[i], key="run2",
                             index=min(1, len(run_labels) - 1))
+    with col2:
+        idx1 = st.selectbox("Current Run", range(len(run_labels)),
+                            format_func=lambda i: run_labels[i], key="run1")
 
     run1 = runs[idx1]
     run2 = runs[idx2]
